@@ -118,6 +118,9 @@ def formula(pins, tag, candidate):
       #include <stdio.h>
       int main(void) {{ puts("hello"); return 0; }}
     C
+    # On macOS the test environment names the host SDK in CPATH and SDKROOT. GCC searches CPATH before its
+    # own include directories, so a cross compiler would read the macOS headers instead of the MorphOS ones.
+    %w[CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH SDKROOT].each {{ |name| ENV.delete(name) }}
     system bin/"ppc-morphos-gcc", "-O2", "-o", "hello", "hello.c"
     assert_match "PowerPC", shell_output("#{{bin}}/ppc-morphos-readelf -h hello")
     assert_match "is installed", shell_output("#{{bin}}/morphos-cross-sdk status")

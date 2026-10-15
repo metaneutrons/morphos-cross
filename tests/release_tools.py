@@ -208,6 +208,9 @@ class ReleaseToolTests(unittest.TestCase):
         self.assertIn('sha256 "' + "a" * 64 + '"', text)
         # The SDK is a resource of the user's own download: no archive of this release holds it.
         self.assertNotIn("morphos-cross-sdk-", text)
+        # Homebrew's macOS test environment puts the host SDK into CPATH; the compiler test must not see it.
+        self.assertIn('%w[CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH SDKROOT].each', text)
+        self.assertLess(text.index("].each { |name| ENV.delete(name) }"), text.index('system bin/"ppc-morphos-gcc"'))
 
     def test_generators_refuse_another_tag(self):
         for kind in ("formula", "pkgbuild"):
