@@ -89,6 +89,6 @@ tar_opts=()
 if tar --version 2>/dev/null | grep -q 'GNU tar'; then
     tar_opts=(--sort=name --owner=0 --group=0 --numeric-owner --mtime="@${SOURCE_DATE_EPOCH:-0}")
 fi
-tar -C "$work/stage" "${tar_opts[@]}" -cf - morphos-cross | xz -T0 -9 > "$out/$name.tar.xz"
+tar -C "$work/stage" ${tar_opts[@]+"${tar_opts[@]}"} -cf - morphos-cross | xz -T0 -9 > "$out/$name.tar.xz"
 (cd "$out" && shasum -a 256 "$name.tar.xz" > "$name.tar.xz.sha256")
 printf 'Archive: %s\n' "$out/$name.tar.xz"

@@ -133,7 +133,7 @@ build_binutils() {
     (cd "$work/build/binutils" &&
         "$binutils_src/configure" --target="$target" --prefix="$stage" --with-sysroot="$stage" \
             --enable-plugins=no --disable-initfini-array --disable-nls --disable-werror \
-            --disable-gprofng --disable-gdb --disable-sim "${host_flags[@]}" "${binutils_flags[@]}" \
+            --disable-gprofng --disable-gdb --disable-sim "${host_flags[@]}" ${binutils_flags[@]+"${binutils_flags[@]}"} \
             CFLAGS="-O2 -DMORPHOS_TARGET -DMORPHOS_SDK_RELEASE_ID=$MORPHOS_SDK_RELEASE_ID" &&
         "$make_cmd" -j"$jobs" "${make_args[@]}" && "$make_cmd" "${make_args[@]}" install-strip)
     mark binutils
@@ -165,7 +165,7 @@ build_gcc() {
             --enable-threads=morphos --enable-version-specific-runtime-libs \
             --with-plugin-ld=no --disable-bootstrap --disable-nls \
             --with-pkgversion="morphos-cross GCC/MorphOS" \
-            --with-gmp="$libs" --with-mpfr="$libs" --with-mpc="$libs" "${host_flags[@]}" "${gcc_flags[@]}" &&
+            --with-gmp="$libs" --with-mpfr="$libs" --with-mpc="$libs" "${host_flags[@]}" ${gcc_flags[@]+"${gcc_flags[@]}"} &&
         PATH="$stage/bin:$PATH" "$make_cmd" -j"$jobs" "${make_args[@]}" &&
         PATH="$stage/bin:$PATH" "$make_cmd" "${make_args[@]}" install-strip)
     mark gcc
