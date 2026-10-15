@@ -74,8 +74,38 @@ jobs:
       - name: Unpack the pinned sources and apply every patch
         run: make patches-check
 
+  # Pull requests that touch only documentation, repository tooling or the other workflows skip the
+  # three toolchain builds. Pushes to main and manual runs always build. tools/plan-ci.sh selects the
+  # full scope for every path it does not know, and CI Success refuses a skipped build without this
+  # verdict.
+  plan:
+    name: Plan the Build Scope
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.scope.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Classify the changed paths
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ $EVENT == pull_request ]]; then
+            git diff --name-only --no-renames "$BASE...$HEAD" | tools/plan-ci.sh >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
+
   build:
     name: Build and Test (${{ matrix.host }})
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
     strategy:
@@ -104,7 +134,7 @@ jobs:
   ci-success:
     name: CI Success
     if: always()
-    needs: [commit-hygiene, quality, patches, build]
+    needs: [commit-hygiene, quality, patches, plan, build]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

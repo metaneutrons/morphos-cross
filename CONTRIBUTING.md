@@ -54,7 +54,10 @@ when that tag does not exist yet.
 - A rebuild of the same SDK (a fix in the scripts or patches): raise `REVISION` in `pins.env`.
 
 A change to scripts, patches or the build container without a change to `pins.env` produces no
-release. CI builds and tests it on every pull request.
+release. CI builds and tests it on every pull request that changes a path the builds read. A pull
+request that touches only documentation, repository tooling or the release and Dependabot workflows
+skips the three builds, because `tools/plan-ci.sh` classifies the changed paths and selects the
+full scope for every path it does not know. Pushes to `main` always build.
 
 If a release run fails after it created the draft release, delete the draft
 (`gh release delete v<version> --yes`, the tag stays and is reused) and re-run the Release workflow

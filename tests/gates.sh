@@ -138,6 +138,57 @@ else
     fail "sysroot: expected GCC with // and a build sysroot, binutils with / and none bare (found $gcc_slashes, $binutils_slashes, $bare, $build_sysroot)"
 fi
 
+# --- tools/plan-ci.sh ---------------------------------------------------------------------------
+# What the builds may skip, and the counter-probes that must not be skipped.
+plan() { printf '%s\n' "$@" | "$root/tools/plan-ci.sh" 2>/dev/null; }
+expect_plan() {
+    local name=$1 want=$2 got
+    shift 2
+    got=$(plan "$@")
+    if [[ $got == "build=$want" ]]; then pass "plan: $name"; else fail "plan: $name (wanted build=$want, got '$got')"; fi
+}
+expect_plan "the README alone skips the builds" false README.md
+expect_plan "documentation and its image skip the builds" false README.md docs/images/overview.svg
+expect_plan "repository tooling and its gates skip the builds" false tools/check-no-binaries.sh tests/gates.sh tests/install.sh
+expect_plan "the installer is checked elsewhere" false install.sh
+expect_plan "the release and Dependabot workflows skip the builds" false .github/workflows/release.yml .github/workflows/dependabot-auto-merge.yml .github/dependabot.yml
+expect_plan "a build script selects the builds" true scripts/build.sh
+expect_plan "a change mixed with documentation selects the builds" true README.md scripts/package.sh docs/images/overview.svg
+expect_plan "a patch selects the builds" true patches/20260529/gcc/0001-relocatable-specs.diff
+expect_plan "the pins select the builds" true pins.env
+expect_plan "the build container selects the builds" true docker/linux.Dockerfile
+expect_plan "the smoke sources select the builds" true tests/smoke/hello.c
+expect_plan "the CI workflow itself selects the builds" true .github/workflows/ci.yml
+expect_plan "the archived licence texts select the builds" true LICENSE THIRD-PARTY.md
+expect_plan "an unknown path selects the builds" true src/new-file.c
+expect_plan "a hidden file selects the builds" true .gitignore
+expect_plan "an empty change list selects the builds" true
+expect_plan "a path with a quoted special character selects the builds" true '"docs/\303\244.md"'
+# Whatever the build scripts, the patches, the container, the smoke tests and the pins consist of
+# must never skip the builds: this keeps the list of skips from growing over a file the builds read.
+unplanned=$(git -C "$root" ls-files | grep -E '^(scripts/[^/]+$|patches/|docker/|tests/smoke/|pins\.env$)' | while read -r f; do
+    [[ $(plan "$f") == "build=true" ]] || printf '%s ' "$f"
+done)
+if [[ -z $unplanned ]]; then pass "plan: every build input selects the builds"
+else fail "plan: build inputs that skip the builds: $unplanned"; fi
+
+# --- tools/check-ci-results.sh ------------------------------------------------------------------
+needs() { # HYGIENE BUILD PLAN_RESULT PLAN_BUILD
+    printf '{"commit-hygiene":{"result":"%s"},"quality":{"result":"success"},"patches":{"result":"success"},"plan":{"result":"%s","outputs":{"build":"%s"}},"build":{"result":"%s"}}' \
+        "$1" "$3" "$4" "$2"
+}
+ci_results() { NEEDS=$(needs "$@") "$root/tools/check-ci-results.sh"; }
+expect_pass "CI results: every job succeeded" ci_results success success success true
+expect_pass "CI results: a push skips commit hygiene" ci_results skipped success success true
+expect_pass "CI results: a skipped build passes when the planner said false" ci_results success skipped success false
+expect_fail "CI results: a skipped build fails when the planner said true" "." ci_results success skipped success true
+expect_fail "CI results: a failed build fails" "." ci_results success failure success true
+expect_fail "CI results: a failed build fails even when the planner said false" "." ci_results success failure success false
+expect_fail "CI results: a failed planner fails" "." ci_results success skipped failure false
+expect_fail "CI results: a skipped planner fails" "." ci_results success success skipped ""
+expect_fail "CI results: a skipped build without a verdict fails" "." env NEEDS='{"commit-hygiene":{"result":"success"},"quality":{"result":"success"},"patches":{"result":"success"},"plan":{"result":"success"},"build":{"result":"skipped"}}' "$root/tools/check-ci-results.sh"
+expect_fail "CI results: a missing job fails" "." env NEEDS='{"commit-hygiene":{"result":"success"},"quality":{"result":"success"},"patches":{"result":"success"},"build":{"result":"success"}}' "$root/tools/check-ci-results.sh"
+
 # --- lists that must agree ----------------------------------------------------------------------
 # shellcheck source=../pins.env
 . "$root/pins.env"
@@ -160,9 +211,14 @@ else fail "hosts: install.sh recognises [$installer_hosts] but pins.env says [$s
 
 # The jobs the CI aggregate waits for are exactly the jobs the result check demands.
 ci_jobs=$(awk '/^jobs:/ { in_jobs = 1; next } in_jobs && /^  [a-z-]+:$/ { sub(/:$/, "", $1); print $1 }' "$root/.github/workflows/ci.yml" | grep -v '^ci-success$' | sort | tr '\n' ' ')
-needed=$(grep -oE '"[a-z-]+"' "$root/tools/check-ci-results.sh" | head -4 | tr -d '"' | sort | tr '\n' ' ')
+needed=$(grep -E 'keys ==' "$root/tools/check-ci-results.sh" | grep -oE '"[a-z-]+"' | tr -d '"' | sort | tr '\n' ' ')
 if [[ $ci_jobs == "$needed" ]]; then pass "CI: the result check demands exactly the jobs of ci.yml"
 else fail "CI: ci.yml has [$ci_jobs] but check-ci-results.sh demands [$needed]"; fi
+waited_for=$(sed -nE 's/^    needs: \[(commit-hygiene.*)\]$/\1/p' "$root/.github/workflows/ci.yml" | tr -d ' ' | tr ',' '\n' | sort | tr '\n' ' ')
+if [[ $ci_jobs == "$waited_for" ]]; then pass "CI: CI Success waits for exactly the jobs of ci.yml"
+else fail "CI: ci.yml has [$ci_jobs] but CI Success waits for [$waited_for]"; fi
+if grep -qF "if: needs.plan.outputs.build == 'true'" "$root/.github/workflows/ci.yml"; then pass "CI: the builds run on the planner's verdict"
+else fail "CI: the builds do not depend on the planner's verdict"; fi
 
 if grep -qE '^    paths: \[pins\.env\]$' "$root/.github/workflows/release.yml"; then pass "release: the push trigger is limited to pins.env"
 else fail "release: the push trigger is not limited to pins.env"; fi
