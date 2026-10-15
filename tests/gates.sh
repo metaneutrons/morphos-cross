@@ -121,6 +121,23 @@ if [[ $(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"') -lt 4 ]]; then
     expect_pass "empty arrays: bash 3 accepts the guarded form" /bin/bash -c 'set -euo pipefail; flags=(); echo ${flags[@]+"${flags[@]}"}'
 fi
 
+# --- the sysroot must be given with a trailing slash ---------------------------------------------
+# Without it GCC computes the relocated sysroot from the name of the install folder (see build.sh).
+# GCC's configure strips one trailing slash, so GCC gets two; binutils gets one.
+# shellcheck disable=SC2016  # the patterns are literal text of the script under test
+gcc_slashes=$(grep -c -F -e '--with-sysroot="$stage//"' "$root/scripts/build.sh" || true)
+# shellcheck disable=SC2016  # literal text of the script under test
+binutils_slashes=$(grep -c -F -e '--prefix="$stage" --with-sysroot="$stage/"' "$root/scripts/build.sh" || true)
+# shellcheck disable=SC2016  # literal text of the script under test
+bare=$(grep -c -F -e '--with-sysroot="$stage"' "$root/scripts/build.sh" || true)
+# shellcheck disable=SC2016  # literal text of the script under test
+build_sysroot=$(grep -c -F -e '--with-build-sysroot="$stage"' "$root/scripts/build.sh" || true)
+if [[ $gcc_slashes -eq 1 && $binutils_slashes -eq 1 && $bare -eq 0 && $build_sysroot -eq 1 ]]; then
+    pass "sysroot: GCC has two trailing slashes and an explicit build sysroot, binutils one slash"
+else
+    fail "sysroot: expected GCC with // and a build sysroot, binutils with / and none bare (found $gcc_slashes, $binutils_slashes, $bare, $build_sysroot)"
+fi
+
 # --- lists that must agree ----------------------------------------------------------------------
 # shellcheck source=../pins.env
 . "$root/pins.env"
