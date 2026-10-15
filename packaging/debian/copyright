@@ -1,0 +1,20 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: morphos-cross
+Source: https://github.com/metaneutrons/morphos-cross
+
+Files: *
+Copyright: the authors of the packaged components, see below
+License: GPL-3.0-or-later
+ This package contains the GNU Compiler Collection and GNU binutils with the MorphOS Team's
+ patches, built as a cross-compiler for MorphOS. On Debian systems, the complete text of the GNU
+ General Public License version 3 can be found in /usr/share/common-licenses/GPL-3.
+ .
+ The runtime libraries of GCC (libgcc, libstdc++ and the others) are covered by the GCC Runtime
+ Library Exception 3.1. GMP is licensed LGPL-3.0-or-later OR GPL-2.0-or-later; MPFR and MPC are
+ licensed LGPL-3.0-or-later. The licence texts of the components are in
+ /usr/lib/morphos-cross/share/doc/morphos-cross/licenses, the list of components and versions in
+ /usr/lib/morphos-cross/share/doc/morphos-cross/THIRD-PARTY.md, and the exact sources in the
+ source archive of the release.
+ .
+ The MorphOS SDK is not part of this package. It belongs to the MorphOS Team, and its own terms
+ apply to it once morphos-cross-sdk has installed it.

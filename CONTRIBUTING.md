@@ -59,6 +59,29 @@ request that touches only documentation, repository tooling or the release and D
 skips the three builds, because `tools/plan-ci.sh` classifies the changed paths and selects the
 full scope for every path it does not know. Pushes to `main` always build.
 
+### Package channels
+
+Every release also carries the Debian packages (`morphos-cross_<version>_amd64.deb` and `_arm64.deb`),
+the Homebrew formula (`morphos-cross.rb`) and the AUR recipe (`PKGBUILD`, `morphos-cross-bin.SRCINFO`),
+produced from the archives of the same run, signed and attested like the archives. The MorphOS SDK is in
+none of them: the Debian maintainer scripts fetch it with `morphos-cross-sdk install --best-effort`, which
+never fails the installation, the formula takes it as a resource and the PKGBUILD as a source.
+
+Homebrew and AUR publish before the promotion and block it when they fail; APT is asked after the
+promotion, because the archive reads stable releases only. A channel runs when all of its values are set in
+the environment `release` and is skipped when none is; a partly configured channel stops the run before
+anything public changes.
+
+| Channel | Values in the environment `release` | Target |
+| --- | --- | --- |
+| Homebrew | variable `HOMEBREW_APP_CLIENT_ID`, secret `HOMEBREW_APP_PRIVATE_KEY` | pull request in `metaneutrons/homebrew-tap` |
+| AUR | variable `AUR_SSH_KNOWN_HOSTS`, secret `AUR_SSH_PRIVATE_KEY` | `morphos-cross-bin` |
+| APT | variable `ARCHIVE_DISPATCH_CLIENT_ID`, secret `ARCHIVE_DISPATCH_PRIVATE_KEY` | project `morphos-cross` in `metaneutrons/apt-archive` |
+
+`make check` runs the probes of the packaging scripts. The Debian package is built and installed in clean
+containers by `scripts/test-deb.sh`, and `tools/release/aur.sh verify` builds the AUR recipe in an Arch
+container.
+
 If a release run fails after it created the draft release, delete the draft
 (`gh release delete v<version> --yes`, the tag stays and is reused) and re-run the Release workflow
 from `main`. A published release is final: fix forward with the next revision.

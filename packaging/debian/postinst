@@ -1,0 +1,21 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# The MorphOS SDK belongs to the MorphOS Team and is not in this package. Fetch it now, but never let
+# a missing network, a full disk or a missing tool fail the installation: the compiler is installed
+# either way, and "morphos-cross-sdk install" repeats the step. MORPHOS_CROSS_SKIP_SDK=1 skips it.
+set -e
+
+tree=/usr/lib/morphos-cross
+cache=/var/cache/morphos-cross
+
+case "$1" in
+    configure)
+        MORPHOS_CROSS_CACHE=$cache "$tree/bin/morphos-cross-sdk" install --best-effort || true
+        # A finished install no longer needs the 370 MiB download; a failed one keeps it to resume.
+        if "$tree/bin/morphos-cross-sdk" status >/dev/null 2>&1; then
+            rm -rf "$cache"
+        fi
+        ;;
+esac
+
+exit 0

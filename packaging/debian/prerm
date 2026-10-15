@@ -1,0 +1,13 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# The SDK files were installed by morphos-cross-sdk, not by dpkg, so dpkg would leave them behind.
+# Remove exactly those files while the helper still exists. An upgrade keeps them.
+set -e
+
+case "$1" in
+    remove | deconfigure)
+        /usr/lib/morphos-cross/bin/morphos-cross-sdk remove >/dev/null 2>&1 || true
+        ;;
+esac
+
+exit 0

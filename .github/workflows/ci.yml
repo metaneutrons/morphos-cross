@@ -122,6 +122,19 @@ jobs:
       - name: Build, package and test in the pinned container
         if: startsWith(matrix.host, 'linux-')
         run: JOBS="$(nproc)" scripts/docker-build.sh
+      - name: Package the Debian package and install it in clean containers
+        if: startsWith(matrix.host, 'linux-')
+        env:
+          HOST: ${{ matrix.host }}
+        run: |
+          set -euo pipefail
+          . ./pins.env
+          arch=amd64
+          [[ "$HOST" == linux-arm64 ]] && arch=arm64
+          scripts/package-deb.sh "dist/morphos-cross-$VERSION-$HOST.tar.xz" dist
+          for image in debian:bookworm-slim ubuntu:24.04; do
+            scripts/test-deb.sh "dist/morphos-cross_${VERSION}_${arch}.deb" cache "$image"
+          done
       - name: Install build prerequisites
         if: startsWith(matrix.host, 'macos-')
         run: brew install make xz
