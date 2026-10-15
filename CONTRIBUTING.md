@@ -67,8 +67,9 @@ produced from the archives of the same run, signed and attested like the archive
 none of them: the Debian maintainer scripts fetch it with `morphos-cross-sdk install --best-effort`, which
 never fails the installation, the formula takes it as a resource and the PKGBUILD as a source.
 
-Homebrew and AUR publish before the promotion and block it when they fail; APT is asked after the
-promotion, because the archive reads stable releases only. A channel runs when all of its values are set in
+Homebrew and AUR publish before the promotion and block it when they fail, the AUR after the tap, so
+that nothing reaches it that the tap's qualification has refused; APT is asked after the promotion,
+because the archive reads stable releases only. A channel runs when all of its values are set in
 the environment `release` and is skipped when none is; a partly configured channel stops the run before
 anything public changes.
 

@@ -686,8 +686,15 @@ jobs:
   # pushed.
   aur:
     name: Publish AUR Package
-    needs: [identity, channels, stage]
-    if: needs.channels.outputs.aur == 'true'
+    # After the tap: its macOS qualification is the channel most likely to refuse a release, and nothing may
+    # reach the AUR that the tap has refused. always(), because an unconfigured Homebrew channel is skipped
+    # and must not skip this one; a failed or cancelled one stops it.
+    needs: [identity, channels, stage, homebrew]
+    if: >-
+      always()
+      && needs.stage.result == 'success'
+      && needs.channels.outputs.aur == 'true'
+      && needs.homebrew.result != 'failure' && needs.homebrew.result != 'cancelled'
     runs-on: ubuntu-24.04
     environment: release
     timeout-minutes: 60
