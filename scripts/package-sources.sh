@@ -50,5 +50,5 @@ tar_opts=()
 if tar --version 2>/dev/null | grep -q 'GNU tar'; then
     tar_opts=(--sort=name --owner=0 --group=0 --numeric-owner --mtime="@${SOURCE_DATE_EPOCH:-0}")
 fi
-tar -C "$tmp" "${tar_opts[@]}" -cf - "$name" | xz -T0 -9 > "$out/$name.tar.xz"
+tar -C "$tmp" ${tar_opts[@]+"${tar_opts[@]}"} -cf - "$name" | xz -T0 -9 > "$out/$name.tar.xz"
 printf 'Source archive: %s\n' "$out/$name.tar.xz"

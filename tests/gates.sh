@@ -106,6 +106,21 @@ else
     fail "cc and file are required for the linkage probes"
 fi
 
+# --- tools/check-empty-arrays.sh ----------------------------------------------------------------
+# shellcheck disable=SC2016  # the script text is written out and runs later
+printf '#!/usr/bin/env bash\nset -euo pipefail\nflags=()\nrun ${flags[@]+"${flags[@]}"}\nnonempty=(a)\nrun "${nonempty[@]}"\n' > "$tmp/array-ok.sh"
+# shellcheck disable=SC2016  # the script text is written out and runs later
+printf '#!/usr/bin/env bash\nset -euo pipefail\nflags=()\nrun "${flags[@]}"\n' > "$tmp/array-bad.sh"
+expect_pass "empty arrays: the guarded form and a non-empty array pass" "$root/tools/check-empty-arrays.sh" "$tmp/array-ok.sh"
+expect_fail "empty arrays: an unguarded expansion is rejected" "expands the possibly empty array flags" "$root/tools/check-empty-arrays.sh" "$tmp/array-bad.sh"
+expect_pass "empty arrays: every tracked script is clean" "$root/tools/check-empty-arrays.sh"
+# The failure itself, where the system bash is the old one.
+if [[ $(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"') -lt 4 ]]; then
+    expect_fail "empty arrays: bash 3 really rejects the unguarded form" "unbound variable" /bin/bash "$tmp/array-bad.sh"
+    # shellcheck disable=SC2016  # the snippet runs in the other shell
+    expect_pass "empty arrays: bash 3 accepts the guarded form" /bin/bash -c 'set -euo pipefail; flags=(); echo ${flags[@]+"${flags[@]}"}'
+fi
+
 # --- lists that must agree ----------------------------------------------------------------------
 # shellcheck source=../pins.env
 . "$root/pins.env"
