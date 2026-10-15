@@ -1,7 +1,7 @@
 # Checks of the repository itself. Building the toolchain is scripts/ci-build.sh.
 SHELL := /bin/bash
 
-SHELL_SCRIPTS = $(shell git ls-files '*.sh' scripts/morphos-cross-sdk)
+SHELL_SCRIPTS = $(shell git ls-files '*.sh' scripts/morphos-cross-sdk packaging/debian/postinst packaging/debian/prerm packaging/debian/postrm)
 
 .PHONY: setup check repository-audit quality-gates shellcheck actionlint secrets-scan patches-check
 

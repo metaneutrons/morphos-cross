@@ -1,0 +1,11 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -e
+
+case "$1" in
+    purge)
+        rm -rf /var/cache/morphos-cross
+        ;;
+esac
+
+exit 0

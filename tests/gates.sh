@@ -189,6 +189,59 @@ expect_fail "CI results: a skipped planner fails" "." ci_results success success
 expect_fail "CI results: a skipped build without a verdict fails" "." env NEEDS='{"commit-hygiene":{"result":"success"},"quality":{"result":"success"},"patches":{"result":"success"},"plan":{"result":"success"},"build":{"result":"skipped"}}' "$root/tools/check-ci-results.sh"
 expect_fail "CI results: a missing job fails" "." env NEEDS='{"commit-hygiene":{"result":"success"},"quality":{"result":"success"},"patches":{"result":"success"},"build":{"result":"success"}}' "$root/tools/check-ci-results.sh"
 
+# --- scripts/package-deb.sh ---------------------------------------------------------------------
+# The package of a fake toolchain tree: its fields, links and scripts, its determinism, and the archives
+# it must refuse. dpkg-deb and ar are Debian tools: without them (a Mac) the probes are skipped, and the
+# CI quality job runs them.
+if command -v dpkg-deb >/dev/null 2>&1 && command -v ar >/dev/null 2>&1; then
+    deb_work=$tmp/deb
+    mkdir -p "$deb_work/tree/morphos-cross/bin" "$deb_work/tree/morphos-cross/share/doc/morphos-cross"
+    printf '#!/bin/sh\n' > "$deb_work/tree/morphos-cross/bin/ppc-morphos-gcc"
+    printf '#!/bin/sh\n' > "$deb_work/tree/morphos-cross/bin/morphos-cross-sdk"
+    printf 'licence\n' > "$deb_work/tree/morphos-cross/share/doc/morphos-cross/LICENSE"
+    chmod +x "$deb_work/tree/morphos-cross/bin/"*
+    fake_archive=$deb_work/morphos-cross-20000101-r1-linux-x86_64.tar.xz
+    tar -C "$deb_work/tree" -cJf "$fake_archive" morphos-cross
+    export SOURCE_DATE_EPOCH=946684800
+    expect_pass "deb: a Linux archive becomes a package" "$root/scripts/package-deb.sh" "$fake_archive" "$deb_work/out1"
+    deb=$deb_work/out1/morphos-cross_20000101-r1_amd64.deb
+    if [[ -f $deb && $(dpkg-deb --field "$deb" Package) == morphos-cross && $(dpkg-deb --field "$deb" Version) == 20000101-r1 &&
+          $(dpkg-deb --field "$deb" Architecture) == amd64 && $(dpkg-deb --field "$deb" Depends) == "libc6 (>= 2.36)" ]]; then
+        pass "deb: canonical file name, package, version, architecture and the glibc baseline"
+    else fail "deb: the fields or the file name are wrong"; fi
+    contents=$(dpkg-deb --contents "$deb")
+    if grep -q 'usr/bin/ppc-morphos-gcc -> ../lib/morphos-cross/bin/ppc-morphos-gcc' <<<"$contents" &&
+       grep -q 'usr/bin/morphos-cross-sdk -> ../lib/morphos-cross/bin/morphos-cross-sdk' <<<"$contents" &&
+       grep -q 'usr/share/doc/morphos-cross/copyright' <<<"$contents" && ! grep -q 'os-include/' <<<"$contents"; then
+        pass "deb: the tools are linked into /usr/bin, the copyright is there and no SDK file is"
+    else fail "deb: unexpected contents"; fi
+    scripts_in_deb=$(dpkg-deb --ctrl-tarfile "$deb" | tar -t | sed 's|^\./||' | grep -v '^$' | sort | tr '\n' ' ')
+    if [[ $scripts_in_deb == "control postinst postrm prerm " ]]; then pass "deb: the maintainer scripts are in the package"
+    else fail "deb: the control member holds [$scripts_in_deb]"; fi
+    "$root/scripts/package-deb.sh" "$fake_archive" "$deb_work/out2" >/dev/null
+    if cmp -s "$deb" "$deb_work/out2/morphos-cross_20000101-r1_amd64.deb"; then pass "deb: building twice gives the same bytes"
+    else fail "deb: two builds differ"; fi
+    members=$(ar t "$deb" | tr '\n' ' ')
+    if [[ $members == "debian-binary control.tar.gz data.tar.xz " ]]; then pass "deb: the control member is gzip, the data member xz"
+    else fail "deb: members are [$members]"; fi
+    mkdir -p "$deb_work/sdktree/morphos-cross/os-include" "$deb_work/sdk"
+    cp -R "$deb_work/tree/morphos-cross/bin" "$deb_work/sdktree/morphos-cross/"
+    tar -C "$deb_work/sdktree" -cJf "$deb_work/sdk/morphos-cross-20000101-r1-linux-x86_64.tar.xz" morphos-cross
+    expect_fail "deb: an archive that contains the SDK is refused" "contains the MorphOS SDK" \
+        "$root/scripts/package-deb.sh" "$deb_work/sdk/morphos-cross-20000101-r1-linux-x86_64.tar.xz" "$deb_work/out3"
+    cp "$fake_archive" "$deb_work/morphos-cross-20000101-r1-macos-arm64.tar.xz"
+    expect_fail "deb: the archive of a Mac has no package" "not the archive of a Linux host" \
+        "$root/scripts/package-deb.sh" "$deb_work/morphos-cross-20000101-r1-macos-arm64.tar.xz" "$deb_work/out4"
+    unset SOURCE_DATE_EPOCH
+else
+    printf 'skip: dpkg-deb and ar are not installed; the package probes run in the CI quality job\n'
+fi
+glibc_deb=$(sed -n 's/^glibc_min=//p' "$root/scripts/package-deb.sh")
+# shellcheck disable=SC2016  # the pattern is literal text of the script under test
+glibc_linkage=$(sed -n 's/^max_glibc=\${MAX_GLIBC:-\(.*\)}$/\1/p' "$root/scripts/check-linkage.sh")
+if [[ -n $glibc_deb && $glibc_deb == "$glibc_linkage" ]]; then pass "deb: the Depends baseline is the glibc baseline of the linkage check ($glibc_deb)"
+else fail "deb: glibc baseline [$glibc_deb] differs from the linkage check [$glibc_linkage]"; fi
+
 # --- lists that must agree ----------------------------------------------------------------------
 # shellcheck source=../pins.env
 . "$root/pins.env"
@@ -222,6 +275,19 @@ else fail "CI: the builds do not depend on the planner's verdict"; fi
 
 if grep -qE '^    paths: \[pins\.env\]$' "$root/.github/workflows/release.yml"; then pass "release: the push trigger is limited to pins.env"
 else fail "release: the push trigger is not limited to pins.env"; fi
+
+# The channels: Homebrew and AUR before the promotion, APT after it (the archive reads stable releases only),
+# each skipped when unconfigured.
+release=$root/.github/workflows/release.yml
+if grep -qF 'needs: [identity, stage, homebrew, aur]' "$release"; then pass "release: the promotion waits for Homebrew and AUR"
+else fail "release: the promotion does not wait for Homebrew and AUR"; fi
+if awk '/^  apt:$/ { in_apt = 1; next } in_apt && /^  [a-z-]+:$/ { in_apt = 0 } in_apt && /needs: \[identity, channels, promote\]/ { found = 1 } END { exit !found }' "$release"; then
+    pass "release: APT is asked after the promotion"
+else fail "release: APT is not asked after the promotion"; fi
+for channel in homebrew aur apt; do
+    if grep -qF "needs.channels.outputs.$channel == 'true'" "$release"; then pass "release: the $channel channel is skipped when unconfigured"
+    else fail "release: the $channel channel does not depend on the preflight"; fi
+done
 
 [[ $failures -eq 0 ]] || { printf '%s gate probe(s) failed\n' "$failures" >&2; exit 1; }
 printf 'All gate probes passed.\n'

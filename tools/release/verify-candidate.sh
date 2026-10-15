@@ -23,16 +23,15 @@ identity="https://github.com/$repository/.github/workflows/release.yml@refs/head
 python3 "$root/tools/release/inventory.py" "$directory" "$version" "$HOSTS"
 
 if [[ $mode == supply-chain ]]; then
-    payloads=("morphos-cross-$version-source.tar.xz" install.sh)
-    for host in $HOSTS; do payloads+=("morphos-cross-$version-$host.tar.xz"); done
-
-    for payload in "${payloads[@]}"; do
+    # The inventory names every file that carries a signature: archives, Debian packages, the source
+    # archive, the installer and the channel metadata.
+    while IFS= read -r payload; do
         cosign verify-blob \
             --bundle "$directory/$payload.sigstore.json" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             --certificate-identity "$identity" \
             "$directory/$payload"
-    done
+    done < <(python3 "$root/tools/release/inventory.py" "$directory" "$version" "$HOSTS" --payloads)
     for asset in "$directory"/*; do
         gh attestation verify "$asset" \
             --repo "$repository" \

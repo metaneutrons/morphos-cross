@@ -2,6 +2,12 @@
 # revision from pins.env, and a merge to main that changes pins.env releases it when that tag does
 # not exist yet. The tag is created here, after every build and check has passed, and the tag
 # ruleset makes it immutable.
+#
+# Package channels. The Debian packages, the Homebrew formula and the AUR recipe are produced here from
+# the archives of the same run, signed, attested and attached to the release. Homebrew and AUR follow
+# the staged prerelease and must succeed before the promotion; APT follows the promotion, because the
+# archive reads stable releases only. A channel without any credential is skipped, one with only some
+# of them stops the run before anything public changes. The MorphOS SDK is in none of them.
 name: Release
 
 on:
@@ -61,6 +67,143 @@ jobs:
             echo "publish=$publish"
           } >> "$GITHUB_OUTPUT"
 
+  # Which package channels are configured, decided before anything is built. A channel runs only when
+  # every value it needs is present. No value skips it; some values but not all stop the run, because that
+  # usually means a secret was renamed and the run would otherwise fail halfway through a public change.
+  # The GitHub Apps are installed on the tap and on the archive, not on this repository.
+  channels:
+    name: Package Channel Preflight
+    needs: identity
+    if: needs.identity.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      homebrew: ${{ steps.decide.outputs.homebrew }}
+      aur: ${{ steps.decide.outputs.aur }}
+      apt: ${{ steps.decide.outputs.apt }}
+    steps:
+      - name: Decide which channels are configured
+        id: decide
+        env:
+          HOMEBREW_APP_CLIENT_ID: ${{ vars.HOMEBREW_APP_CLIENT_ID }}
+          HOMEBREW_APP_PRIVATE_KEY: ${{ secrets.HOMEBREW_APP_PRIVATE_KEY }}
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_SSH_KNOWN_HOSTS: ${{ vars.AUR_SSH_KNOWN_HOSTS }}
+          ARCHIVE_DISPATCH_CLIENT_ID: ${{ vars.ARCHIVE_DISPATCH_CLIENT_ID }}
+          ARCHIVE_DISPATCH_PRIVATE_KEY: ${{ secrets.ARCHIVE_DISPATCH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          # stdout carries nothing but true or false, so that an assignment can take it; messages go to
+          # stderr.
+          decide() {
+            local channel=$1; shift
+            local present=0 missing=0 name
+            for name in "$@"; do
+              if [[ -n "${!name:-}" ]]; then present=$((present + 1)); else missing=$((missing + 1)); fi
+            done
+            if (( present == 0 )); then
+              echo "::notice::$channel is not configured and is skipped" >&2
+              printf 'false'
+            elif (( missing > 0 )); then
+              echo "::error::MC7110 $channel is only partly configured; $missing value(s) missing" >&2
+              return 1
+            else
+              printf 'true'
+            fi
+          }
+          # Assignment and call stand apart: written as echo "x=$(decide ...)", a failure of decide would
+          # have no effect, because the exit status would be echo's.
+          homebrew=$(decide Homebrew HOMEBREW_APP_CLIENT_ID HOMEBREW_APP_PRIVATE_KEY)
+          aur=$(decide AUR AUR_SSH_PRIVATE_KEY AUR_SSH_KNOWN_HOSTS)
+          apt=$(decide APT ARCHIVE_DISPATCH_CLIENT_ID ARCHIVE_DISPATCH_PRIVATE_KEY)
+          {
+            echo "homebrew=$homebrew"
+            echo "aur=$aur"
+            echo "apt=$apt"
+          } >> "$GITHUB_OUTPUT"
+      # A token with explicit permission inputs: when the installation lacks one, minting fails here
+      # instead of in the middle of a write.
+      - name: Mint a tap token
+        if: steps.decide.outputs.homebrew == 'true'
+        id: tap-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.HOMEBREW_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HOMEBREW_APP_PRIVATE_KEY }}
+          owner: metaneutrons
+          repositories: homebrew-tap
+          permission-contents: write
+          permission-pull-requests: write
+          permission-actions: read
+          permission-checks: read
+          permission-statuses: read
+          permission-administration: read
+      - name: Check what the installation reaches
+        if: steps.decide.outputs.homebrew == 'true'
+        env:
+          GH_TOKEN: ${{ steps.tap-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          # permissions.push in a repository response describes the caller's role, not the installation.
+          reached=$(gh api installation/repositories --jq '[.repositories[].full_name] | sort | join(",")')
+          [[ "$reached" == "metaneutrons/homebrew-tap" ]] || {
+            echo "::error::MC7111 the installation reaches '$reached' instead of exactly metaneutrons/homebrew-tap"
+            exit 1
+          }
+      - name: Mint an archive token
+        if: steps.decide.outputs.apt == 'true'
+        id: archive-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.ARCHIVE_DISPATCH_CLIENT_ID }}
+          private-key: ${{ secrets.ARCHIVE_DISPATCH_PRIVATE_KEY }}
+          owner: metaneutrons
+          repositories: apt-archive
+          permission-actions: write
+          permission-contents: read
+      - name: Check the archive manifest names this project
+        if: steps.decide.outputs.apt == 'true'
+        env:
+          GH_TOKEN: ${{ steps.archive-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/metaneutrons/apt-archive/contents/domains/metaneutrons.cc/manifest.toml" \
+            --jq .content | base64 -d > manifest.toml
+          python3 - <<'PY'
+          import sys, tomllib
+          with open("manifest.toml", "rb") as handle:
+              manifest = tomllib.load(handle)
+          entry = next((p for p in manifest.get("projects", []) if p.get("name") == "morphos-cross"), None)
+          if entry is None:
+              sys.exit("::error::MC7112 morphos-cross is not in the manifest of metaneutrons.cc")
+          if "morphos-cross" not in entry.get("packages", []):
+              sys.exit("::error::MC7113 the package morphos-cross is not listed for the project")
+          for arch in ("amd64", "arm64"):
+              if arch not in manifest["release"].get("architectures", []):
+                  sys.exit(f"::error::MC7114 the architecture {arch} is missing from the manifest")
+          PY
+      - name: Check the AUR key is accepted
+        if: steps.decide.outputs.aur == 'true'
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_SSH_KNOWN_HOSTS: ${{ vars.AUR_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$RUNNER_TEMP/ssh"
+          install -m 0600 /dev/null "$RUNNER_TEMP/ssh/aur"
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/ssh/aur"
+          printf '%s\n' "$AUR_SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/ssh/known_hosts"
+          # The AUR answers "help" to an authenticated key and refuses an unknown one. The call only
+          # reads.
+          ssh -i "$RUNNER_TEMP/ssh/aur" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" aur@aur.archlinux.org help >/dev/null || {
+            echo "::error::MC7115 the AUR does not accept the key"
+            exit 1
+          }
+
   build:
     name: Build (${{ matrix.host }})
     needs: identity
@@ -91,11 +234,19 @@ jobs:
         env:
           HOST: ${{ matrix.host }}
         run: JOBS="$(sysctl -n hw.ncpu)" scripts/ci-build.sh "$HOST"
-      - name: Keep the archive for the clean-room test and the release
+      - name: Build the Debian package from the archive
+        if: startsWith(matrix.host, 'linux-')
+        env:
+          HOST: ${{ matrix.host }}
+          VERSION: ${{ needs.identity.outputs.version }}
+        run: scripts/package-deb.sh "dist/morphos-cross-$VERSION-$HOST.tar.xz" dist
+      - name: Keep the archive and the package for the clean-room test and the release
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: payload-${{ matrix.host }}
-          path: dist/*.tar.xz
+          path: |
+            dist/*.tar.xz
+            dist/*.deb
           if-no-files-found: error
           retention-days: 1
 
@@ -110,10 +261,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { host: linux-x86_64, runner: ubuntu-24.04, image: 'debian:bookworm-slim' }
-          - { host: linux-x86_64, runner: ubuntu-24.04, image: 'ubuntu:24.04' }
-          - { host: linux-arm64, runner: ubuntu-24.04-arm, image: 'debian:bookworm-slim' }
-          - { host: linux-arm64, runner: ubuntu-24.04-arm, image: 'ubuntu:24.04' }
+          - { host: linux-x86_64, arch: amd64, runner: ubuntu-24.04, image: 'debian:bookworm-slim' }
+          - { host: linux-x86_64, arch: amd64, runner: ubuntu-24.04, image: 'ubuntu:24.04' }
+          - { host: linux-arm64, arch: arm64, runner: ubuntu-24.04-arm, image: 'debian:bookworm-slim' }
+          - { host: linux-arm64, arch: arm64, runner: ubuntu-24.04-arm, image: 'ubuntu:24.04' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Download the candidate archive
@@ -133,6 +284,14 @@ jobs:
           docker run --rm \
             --volume "$PWD:/src:ro" --volume "$PWD/dl:/dl:ro" --volume "$PWD/cache:/cache:ro" \
             "$IMAGE" bash /src/scripts/clean-room.sh "/dl/morphos-cross-$VERSION-$HOST.tar.xz" /cache
+      # The package, installed the way a user installs it: without a network, with a cached download,
+      # with the skip switch, then reinstalled, removed and purged.
+      - name: Install the Debian package in clean containers
+        env:
+          IMAGE: ${{ matrix.image }}
+          VERSION: ${{ needs.identity.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: scripts/test-deb.sh "dl/morphos-cross_${VERSION}_${ARCH}.deb" cache "$IMAGE"
 
   source:
     name: Source Archive
@@ -197,7 +356,7 @@ jobs:
           uv venv "$RUNNER_TEMP/spdx-validation"
           uv pip sync --python "$RUNNER_TEMP/spdx-validation/bin/python" \
             --require-hashes tools/release/requirements.txt
-      - name: Generate and validate the SBOMs, sign every payload
+      - name: Generate and validate the SBOMs
         run: |
           set -euo pipefail
           . ./pins.env
@@ -207,11 +366,23 @@ jobs:
               "$VERSION" "$GITHUB_SHA" "$EPOCH"
             "$RUNNER_TEMP/spdx-validation/bin/python" tools/release/validate-sbom.py "$archive.spdx.json"
           done
-          payloads=("candidate/morphos-cross-$VERSION-source.tar.xz" candidate/install.sh)
-          for host in $HOSTS; do payloads+=("candidate/morphos-cross-$VERSION-$host.tar.xz"); done
-          for payload in "${payloads[@]}"; do
-            cosign sign-blob --yes --bundle "$payload.sigstore.json" "$payload"
-          done
+      # The formula and the PKGBUILD are written from the digests of the archives in this candidate. The
+      # MorphOS SDK is a resource of the formula and a source of the PKGBUILD: the user's own download
+      # fetches it, and no channel carries it.
+      - name: Write and check the channel metadata
+        run: |
+          set -euo pipefail
+          python3 tools/release/channels.py formula pins.env "$TAG" candidate candidate/morphos-cross.rb
+          python3 tools/release/channels.py pkgbuild pins.env "$TAG" candidate candidate/PKGBUILD
+          ruby -c candidate/morphos-cross.rb
+          tools/release/aur.sh srcinfo candidate/PKGBUILD candidate/morphos-cross-bin.SRCINFO
+      - name: Sign every payload
+        run: |
+          set -euo pipefail
+          . ./pins.env
+          while IFS= read -r payload; do
+            cosign sign-blob --yes --bundle "candidate/$payload.sigstore.json" "candidate/$payload"
+          done < <(python3 tools/release/inventory.py candidate "$VERSION" "$HOSTS" --payloads)
       - name: Write the checksum inventory
         run: |
           set -euo pipefail
@@ -332,9 +503,297 @@ jobs:
             cmp "$asset" "public/$(basename "$asset")"
           done
 
+  # The formula was produced, qualified, signed and attested in the supply chain; it is not built again
+  # here. The tap's main is protected: a pull request and the check "Formula qualification" are required,
+  # so the formula reaches the tap through a pull request, and the merge waits for that check.
+  homebrew:
+    name: Update Homebrew Tap
+    needs: [identity, channels, stage]
+    if: needs.channels.outputs.homebrew == 'true'
+    runs-on: ubuntu-24.04
+    environment: release
+    # The qualification in the tap installs the formula on macOS, including the 370 MiB SDK resource.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      TAP_REPO: metaneutrons/homebrew-tap
+      VERSION: ${{ needs.identity.outputs.version }}
+      TAG: ${{ needs.identity.outputs.tag }}
+    steps:
+      - name: Mint a tap token
+        id: tap-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.HOMEBREW_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HOMEBREW_APP_PRIVATE_KEY }}
+          owner: metaneutrons
+          repositories: homebrew-tap
+          permission-contents: write
+          permission-pull-requests: write
+          permission-actions: read
+          permission-checks: read
+          permission-statuses: read
+          permission-administration: read
+      - name: Measure the installation and the bot
+        id: identity
+        env:
+          GH_TOKEN: ${{ steps.tap-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          reached=$(gh api installation/repositories --jq '[.repositories[].full_name] | sort | join(",")')
+          [[ "$reached" == "$TAP_REPO" ]] || {
+            echo "::error::MC7510 the installation reaches '$reached' instead of exactly $TAP_REPO"; exit 1; }
+          # Git authorship comes from the measured bot, through its public endpoint: /user does not apply
+          # to an installation token.
+          read -r login id < <(gh api "users/metaneutrons-homebrew%5Bbot%5D" --jq '"\(.login) \(.id)"')
+          {
+            echo "bot_login=$login"
+            echo "bot_email=${id}+${login}@users.noreply.github.com"
+          } >> "$GITHUB_OUTPUT"
+      - name: Fetch the formula from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern morphos-cross.rb --dir . --clobber
+          mv morphos-cross.rb formula.rb
+          [[ $(grep -Fc "/releases/download/${TAG}/" formula.rb) == 3 ]] || {
+            echo "::error::MC7506 the formula does not reference three exact release URLs"; exit 1; }
+      - name: Branch, commit and pull request in the tap
+        id: pr
+        env:
+          GH_TOKEN: ${{ steps.tap-token.outputs.token }}
+          TAP_TOKEN: ${{ steps.tap-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.identity.outputs.bot_login }}
+          BOT_EMAIL: ${{ steps.identity.outputs.bot_email }}
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
+          install -d tap/Formula
+          install -m 0644 formula.rb tap/Formula/morphos-cross.rb
+          cd tap
+          # The tap's qualification also checks that README.md was generated from the formulas.
+          scripts/generate-readme.sh README.md
+          if [[ -z $(git status --porcelain) ]]; then
+            echo "::notice::the tap already carries this formula"
+            echo "unchanged=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "unchanged=false" >> "$GITHUB_OUTPUT"
+          branch="morphos-cross-${VERSION}"
+          git config user.name "$BOT_LOGIN"
+          git config user.email "$BOT_EMAIL"
+          git checkout -b "$branch"
+          git add Formula/morphos-cross.rb README.md
+          git commit -m "Update morphos-cross to ${VERSION}"
+          git push --force-with-lease origin "$branch"
+          head=$(git rev-parse HEAD)
+          pr=$(gh pr list --repo "$TAP_REPO" --head "$branch" --state open --json number --jq '.[0].number // empty')
+          if [[ -z "$pr" ]]; then
+            url=$(gh pr create --repo "$TAP_REPO" --base main --head "$branch" \
+                    --title "Update morphos-cross to ${VERSION}" \
+                    --body "Formula update from the release run of morphos-cross ${TAG}.")
+            pr=${url##*/}
+          fi
+          [[ "$pr" =~ ^[0-9]+$ ]] || { echo "::error::MC7502 no pull request number for $branch"; exit 1; }
+          {
+            echo "number=$pr"
+            echo "head=$head"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::tap pull request #$pr on $head"
+      # Bounded, so that the wait stays inside the lifetime of the first token. A timeout fails closed: it
+      # justifies neither a merge nor a second attempt with a broader permission.
+      - name: Wait for the qualification
+        if: steps.pr.outputs.unchanged == 'false'
+        env:
+          GH_TOKEN: ${{ steps.tap-token.outputs.token }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          # gh pr checks fails while the tap has registered no check run yet, and --watch does not wait that
+          # out: poll until one exists.
+          for _ in $(seq 1 30); do
+            n=$(gh pr checks "$PR" --repo "$TAP_REPO" --json name --jq 'length' 2>/dev/null || echo 0)
+            [[ "${n:-0}" -gt 0 ]] && break
+            sleep 10
+          done
+          set +e
+          timeout 3300 gh pr checks "$PR" --repo "$TAP_REPO" --watch --fail-fast --interval 30
+          rc=$?
+          set -e
+          case "$rc" in
+            0) echo "::notice::qualification passed" ;;
+            124) echo "::error::MC7504 the qualification was not finished after 55 minutes"; exit 1 ;;
+            *) echo "::error::MC7503 the qualification ended with exit $rc"; exit 1 ;;
+          esac
+      # A fresh token after the wait: the first may have expired, and the merge is the last and most
+      # expensive write. It is minted even when there is nothing to merge, so that the read-back has one
+      # origin.
+      - name: Mint a fresh tap token
+        id: merge-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.HOMEBREW_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HOMEBREW_APP_PRIVATE_KEY }}
+          owner: metaneutrons
+          repositories: homebrew-tap
+          permission-contents: write
+          permission-pull-requests: write
+          permission-actions: read
+          permission-checks: read
+          permission-statuses: read
+          permission-administration: read
+      - name: Re-check head, required check and tap protection, then merge
+        if: steps.pr.outputs.unchanged == 'false'
+        env:
+          GH_TOKEN: ${{ steps.merge-token.outputs.token }}
+          PR: ${{ steps.pr.outputs.number }}
+          EXPECTED_HEAD: ${{ steps.pr.outputs.head }}
+        run: |
+          set -euo pipefail
+          reached=$(gh api installation/repositories --jq '[.repositories[].full_name] | sort | join(",")')
+          [[ "$reached" == "$TAP_REPO" ]] || { echo "::error::MC7510 the second token reaches '$reached'"; exit 1; }
+          head=$(gh pr view "$PR" --repo "$TAP_REPO" --json headRefOid --jq .headRefOid)
+          [[ "$head" == "$EXPECTED_HEAD" ]] || {
+            echo "::error::MC7511 the pull request head is $head, what was pushed is $EXPECTED_HEAD"; exit 1; }
+          # The protection still applies and the gate is still required; otherwise the qualification
+          # would be decoration.
+          contexts=$(gh api "repos/${TAP_REPO}/branches/main/protection" \
+            --jq '[.required_status_checks.contexts[]] | join(",")')
+          [[ ",$contexts," == *",Formula qualification,"* ]] || {
+            echo "::error::MC7512 'Formula qualification' is no longer required on $TAP_REPO (now: $contexts)"; exit 1; }
+          state=$(gh pr view "$PR" --repo "$TAP_REPO" --json statusCheckRollup \
+            --jq '[.statusCheckRollup[] | select(.name == "Formula qualification")] | last
+                  | if . == null then "absent none"
+                    else "\((.status // "absent") | ascii_downcase) \((.conclusion // "none") | ascii_downcase)" end')
+          [[ "$state" == "completed success" ]] || {
+            echo "::error::MC7513 'Formula qualification' stands at '$state' instead of completed success"; exit 1; }
+          gh pr merge "$PR" --repo "$TAP_REPO" --squash --delete-branch
+      - name: Read the formula back from main
+        env:
+          GH_TOKEN: ${{ steps.merge-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${TAP_REPO}/contents/Formula/morphos-cross.rb?ref=main" --jq .content | base64 --decode > published.rb
+          # Byte for byte against the produced asset: a formula can name the right version and still be a
+          # different one.
+          cmp published.rb formula.rb
+          echo "::notice::the formula on $TAP_REPO is byte for byte the produced one"
+
+  # The PKGBUILD and .SRCINFO were produced in the supply chain and signed there. Here the recipe is built
+  # in an Arch container against the published release, installed with pacman and used, and only then
+  # pushed.
+  aur:
+    name: Publish AUR Package
+    needs: [identity, channels, stage]
+    if: needs.channels.outputs.aur == 'true'
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.identity.outputs.version }}
+      TAG: ${{ needs.identity.outputs.tag }}
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+      AUR_SSH_KNOWN_HOSTS: ${{ vars.AUR_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch PKGBUILD and .SRCINFO from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern PKGBUILD \
+            --pattern morphos-cross-bin.SRCINFO --dir . --clobber
+          # GitHub renames a release asset with a leading dot, so the file travels without it.
+          mv morphos-cross-bin.SRCINFO .SRCINFO
+          pkgver=${VERSION%-r*}
+          pkgrel=${VERSION##*-r}
+          if ! grep -qx "pkgver=${pkgver}" PKGBUILD || ! grep -qx "pkgrel=${pkgrel}" PKGBUILD; then
+            echo "::error::MC7601 PKGBUILD does not carry ${pkgver}-${pkgrel}"
+            exit 1
+          fi
+          # awk, not grep: .SRCINFO indents with a tab, and \t in a pattern is a matter of dialect.
+          awk -v v="$pkgver" -v r="$pkgrel" '$1 == "pkgver" && $2 == "=" && $3 == v { a = 1 }
+                                             $1 == "pkgrel" && $2 == "=" && $3 == r { b = 1 }
+                                             END { exit !(a && b) }' .SRCINFO || {
+            echo "::error::MC7602 .SRCINFO does not carry ${pkgver}-${pkgrel}"; exit 1; }
+      - name: Build, install and use the package in an Arch container
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The SDK comes from the pinned download that the clean-room tests use, not from the network a
+          # second time; the PKGBUILD keeps the URL users get. The toolchain archive is fetched by makepkg
+          # from the published release, so the build runs against the bytes users get too.
+          scripts/fetch.sh sdk
+          mkdir archive
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "morphos-cross-${VERSION}-linux-x86_64.tar.xz" --dir archive --clobber
+          tools/release/aur.sh verify PKGBUILD cache "archive/morphos-cross-${VERSION}-linux-x86_64.tar.xz"
+      - name: Push to the AUR
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$RUNNER_TEMP/ssh"
+          install -m 0600 /dev/null "$RUNNER_TEMP/ssh/aur"
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/ssh/aur"
+          printf '%s\n' "$AUR_SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/ssh/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/ssh/aur -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/ssh/known_hosts"
+          # The first push to a name that does not exist yet creates the package.
+          git -c init.defaultBranch=master clone ssh://aur@aur.archlinux.org/morphos-cross-bin.git "$RUNNER_TEMP/aur"
+          install -m 0644 PKGBUILD "$RUNNER_TEMP/aur/PKGBUILD"
+          install -m 0644 .SRCINFO "$RUNNER_TEMP/aur/.SRCINFO"
+          cd "$RUNNER_TEMP/aur"
+          if [[ -z $(git status --short) ]]; then
+            echo "::notice::the AUR already carries this version"
+            exit 0
+          fi
+          git config user.name 'morphos-cross release automation'
+          git config user.email 'fabian@schmieder.eu'
+          git add PKGBUILD .SRCINFO
+          git commit -m "morphos-cross-bin ${VERSION%-r*}-${VERSION##*-r}"
+          git push origin HEAD:master
+      # An accepted push says nothing about what the AUR serves. The read is public and anonymous, not
+      # through the SSH access that wrote.
+      - name: Read the AUR back and compare it with the qualified files
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/aur-readback"
+          git clone --quiet --depth 1 https://aur.archlinux.org/morphos-cross-bin.git "$RUNNER_TEMP/aur-readback"
+          for file in PKGBUILD .SRCINFO; do
+            [[ -f "$RUNNER_TEMP/aur-readback/$file" ]] || { echo "::error::MC7610 $file is missing from the public AUR repository"; exit 1; }
+            cmp "$file" "$RUNNER_TEMP/aur-readback/$file"
+          done
+          # The RPC index lags behind the push; twenty minutes carried it where five did not.
+          expected="${VERSION%-r*}-${VERSION##*-r}"
+          deadline=$(( SECONDS + 1200 ))
+          while :; do
+            served=$(curl -sS --max-time 30 "https://aur.archlinux.org/rpc/v5/info?arg[]=morphos-cross-bin" \
+              | jq -r 'try (.results[0].Version) catch ""')
+            if [[ "$served" == "$expected" ]]; then
+              echo "::notice::the AUR carries morphos-cross-bin ${served}"
+              break
+            fi
+            if (( SECONDS > deadline )); then
+              echo "::error::MC7611 the AUR RPC reports '${served:-nothing}' instead of ${expected}"
+              exit 1
+            fi
+            sleep 20
+          done
+
   promote:
     name: Promote Stable Release
-    needs: [identity, stage]
+    needs: [identity, stage, homebrew, aur]
+    # always(), because a skipped channel must not skip the promotion; a failed or cancelled one must stop it.
+    if: >-
+      always()
+      && needs.stage.result == 'success'
+      && needs.homebrew.result != 'failure' && needs.homebrew.result != 'cancelled'
+      && needs.aur.result != 'failure' && needs.aur.result != 'cancelled'
     runs-on: ubuntu-24.04
     environment: release
     permissions:
@@ -371,3 +830,144 @@ jobs:
           done
           tools/release/verify-candidate.sh after "$TAG" supply-chain
           for asset in candidate/*; do cmp "$asset" "after/$(basename "$asset")"; done
+
+  # The archive reads stable releases only, so it is asked after the promotion. This repository uploads
+  # nothing and holds no signing key: the attested .deb files hang on the release, and the archive
+  # fetches them from there. The token is minted right before use for one repository and two permissions.
+  apt:
+    name: Ask the APT Archive to Publish
+    needs: [identity, channels, promote]
+    # A status function, or the skip of an unrelated job propagates through.
+    if: >-
+      !cancelled()
+      && needs.promote.result == 'success'
+      && needs.channels.outputs.apt == 'true'
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.identity.outputs.version }}
+      TAG: ${{ needs.identity.outputs.tag }}
+      ARCHIVE_REPO: metaneutrons/apt-archive
+      ARCHIVE_DOMAIN: metaneutrons.cc
+      ARCHIVE_PROJECT: morphos-cross
+      DEB_PACKAGE: morphos-cross
+    steps:
+      - name: Mint an archive token
+        id: archive-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.ARCHIVE_DISPATCH_CLIENT_ID }}
+          private-key: ${{ secrets.ARCHIVE_DISPATCH_PRIVATE_KEY }}
+          owner: metaneutrons
+          repositories: apt-archive
+          permission-actions: write
+          permission-contents: read
+      # The contract is read, not assumed: whether the archive keeps a prefix per project or puts
+      # everything at the domain root is decided by the manifest.
+      - name: Read the domain contract from the manifest
+        id: contract
+        env:
+          GH_TOKEN: ${{ steps.archive-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${ARCHIVE_REPO}/contents/domains/${ARCHIVE_DOMAIN}/manifest.toml" --jq .content | base64 -d > manifest.toml
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, sys, tomllib
+          project = os.environ["ARCHIVE_PROJECT"]
+          package = os.environ["DEB_PACKAGE"]
+          with open("manifest.toml", "rb") as handle:
+              manifest = tomllib.load(handle)
+          entry = next((p for p in manifest.get("projects", []) if p.get("name") == project), None)
+          if entry is None:
+              sys.exit(f"::error::MC7440 {project} is not in the manifest")
+          if package not in entry.get("packages", []):
+              sys.exit(f"::error::MC7441 {package} is not listed under packages of {project}")
+          release, domain = manifest["release"], manifest["domain"]
+          if "main" not in release.get("components", []):
+              sys.exit("::error::MC7442 the component main is missing from the manifest")
+          prefix = (entry.get("prefix") or "").strip("/")
+          if prefix:
+              sys.exit(f"::error::MC7444 the manifest keeps the prefix /{prefix}; a shared archive at the domain root is expected")
+          print(f"base_url={domain['base_url'].rstrip('/')}")
+          print(f"suite={release['codename']}")
+          PY
+      # The reviewed workflow on the protected default branch, with named inputs.
+      - name: Dispatch the archive workflow
+        env:
+          GH_TOKEN: ${{ steps.archive-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          branch=$(gh api "repos/${ARCHIVE_REPO}" --jq .default_branch)
+          gh workflow run publish.yml --repo "$ARCHIVE_REPO" --ref "$branch" \
+            -f domain="$ARCHIVE_DOMAIN" -f project="$ARCHIVE_PROJECT"
+          echo "::notice::publish.yml dispatched on ${ARCHIVE_REPO}@${branch}"
+      # The proof is what the archive serves. An apt client with Acquire-By-Hash never reads
+      # Packages.gz by its plain path: it takes the checksum from InRelease and fetches the by-hash
+      # object, SHA512 first. Asking for that same object turns a silent degradation into a failure. The
+      # index is shared with other projects, so the search is strictly for this package, and the version
+      # is compared as a string.
+      - name: Wait until the archive serves the version
+        env:
+          BASE_URL: ${{ steps.contract.outputs.base_url }}
+          SUITE: ${{ steps.contract.outputs.suite }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/index-sha.awk" <<'AWK'
+          /^SHA512:/               { block = 1; next }
+          block && /^[^[:space:]]/ { block = 0 }
+          block && $3 == want      { print $1; exit }
+          AWK
+          cat > "$RUNNER_TEMP/pick.awk" <<'AWK'
+          $1 == "Package:"  { pkg  = $2 }
+          $1 == "Version:"  { ver  = $2 }
+          $1 == "Filename:" { name = $2 }
+          function hit() { return pkg == package && ver == version }
+          /^[[:space:]]*$/ { if (hit()) { print name; done = 1; exit } pkg = ""; ver = ""; name = "" }
+          END { if (!done && hit()) print name }
+          AWK
+          cat > "$RUNNER_TEMP/resolve.sh" <<'SH'
+          set -euo pipefail
+          arch="$1"
+          base="${BASE_URL}/dists/${SUITE}"
+          curl --fail --silent --location "${base}/InRelease" --output inrelease
+          sum=$(awk -v want="main/binary-${arch}/Packages.gz" -f "$RUNNER_TEMP/index-sha.awk" inrelease)
+          [ -n "$sum" ]
+          curl --fail --silent --location "${base}/main/binary-${arch}/by-hash/SHA512/${sum}" --output "packages-${arch}.gz"
+          printf '%s  %s\n' "$sum" "packages-${arch}.gz" | sha512sum --check --status
+          gzip -dc "packages-${arch}.gz" | awk -v package="$DEB_PACKAGE" -v version="$VERSION" -f "$RUNNER_TEMP/pick.awk"
+          SH
+          deadline=$(( SECONDS + 1500 ))
+          while :; do
+            amd64=$(bash "$RUNNER_TEMP/resolve.sh" amd64 2>/dev/null || true)
+            arm64=$(bash "$RUNNER_TEMP/resolve.sh" arm64 2>/dev/null || true)
+            if [[ -n "$amd64" && -n "$arm64" ]]; then
+              echo "::notice::${BASE_URL} serves ${VERSION} as ${amd64} and ${arm64}"
+              printf 'PUBLISHED_AMD64=%s\nPUBLISHED_ARM64=%s\n' "$amd64" "$arm64" >> "$GITHUB_ENV"
+              break
+            fi
+            if (( SECONDS > deadline )); then
+              echo "::error::MC7430 the archive does not serve ${VERSION} within the deadline; the cause is in the runs of ${ARCHIVE_REPO}"
+              exit 1
+            fi
+            sleep 30
+          done
+      # An index that names the version is not yet a served file.
+      - name: Compare the served package with the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_URL: ${{ steps.contract.outputs.base_url }}
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            case "$arch" in
+              amd64) filename="$PUBLISHED_AMD64" ;;
+              arm64) filename="$PUBLISHED_ARM64" ;;
+            esac
+            curl --fail --silent --show-error --location "${BASE_URL}/${filename}" --output "published-${arch}.deb"
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "morphos-cross_${VERSION}_${arch}.deb" --dir release --clobber
+            cmp "published-${arch}.deb" "release/morphos-cross_${VERSION}_${arch}.deb"
+            echo "::notice::${arch} is identical to the release asset"
+          done
