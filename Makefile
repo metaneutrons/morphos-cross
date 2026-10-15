@@ -15,6 +15,7 @@ repository-audit:
 quality-gates:
 	@tests/gates.sh
 	@tests/install.sh
+	@tests/sdk-helper.sh
 	@python3 -m unittest tests/release_tools.py
 	@lefthook validate
 

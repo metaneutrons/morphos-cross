@@ -4,38 +4,154 @@
 # and libraries into this toolchain. The SDK belongs to the MorphOS Team and is
 # not part of the morphos-cross archives; see README.md.
 #
-#   morphos-cross-sdk install [SDK.lha]   download (or use SDK.lha), verify, install
-#   morphos-cross-sdk status              say whether the SDK is installed
+#   morphos-cross-sdk install [--best-effort] [--force] [SDK.lha]
+#                                         download (or use SDK.lha), verify, install
+#   morphos-cross-sdk status              say whether the pinned SDK is installed; exit 1 if not
+#   morphos-cross-sdk remove              remove the files this helper installed
+#
+# --best-effort is for package scripts: a failure prints a warning and the exit status stays 0, so
+# a missing network never fails a package installation. MORPHOS_CROSS_SKIP_SDK=1 skips the step.
 set -euo pipefail
 
-here=$(cd "$(dirname "$0")/.." && pwd)
+# The packages link this script into a directory on the PATH. Follow the links to find the toolchain.
+self=${BASH_SOURCE[0]}
+hops=0
+while [[ -L $self ]]; do
+    hops=$((hops + 1))
+    [[ $hops -le 40 ]] || { printf 'ERROR: too many symbolic links: %s\n' "${BASH_SOURCE[0]}" >&2; exit 1; }
+    link=$(readlink "$self")
+    case $link in
+        /*) self=$link ;;
+        *) self=$(dirname "$self")/$link ;;
+    esac
+done
+here=$(cd "$(dirname "$self")/.." && pwd)
 share=$here/share/morphos-cross
 # shellcheck source=../pins.env
 . "$share/pins.env"
 cache=${MORPHOS_CROSS_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/morphos-cross}
-marker=$here/os-include/exec/types.h
+record=$share/sdk-installed
+files=$share/sdk-files.list
 
-case "${1:-status}" in
-    install)
-        archive=${2:-}
-        if [[ -z $archive ]]; then
-            MORPHOS_CROSS_CACHE=$cache "$share/scripts/fetch.sh" sdk
-            archive=$cache/$(basename "$SDK_URL")
-        fi
-        "$share/scripts/install-sdk.sh" "$archive" "$here"
+usage() {
+    printf 'usage: morphos-cross-sdk install [--best-effort] [--force] [SDK.lha] | status | remove\n' >&2
+    exit 2
+}
+
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | cut -d' ' -f1
+    else
+        shasum -a 256 "$1" | cut -d' ' -f1
+    fi
+}
+
+# current, outdated (installed, but not the pinned SDK or without a record) or missing
+sdk_state() {
+    if [[ -f $record ]]; then
+        if grep -qx "SDK_SHA256=$SDK_SHA256" "$record"; then printf 'current\n'; else printf 'outdated\n'; fi
+    elif [[ -f $here/os-include/exec/types.h ]]; then
+        printf 'outdated\n'
+    else
+        printf 'missing\n'
+    fi
+}
+
+# Every step reports failure through its status: the function runs in an if, where set -e is off.
+do_install() { # ARCHIVE, or an empty string to download the pinned SDK
+    local archive=$1 sum
+    if [[ -z $archive ]]; then
+        MORPHOS_CROSS_CACHE=$cache "$share/scripts/fetch.sh" sdk || return 1
+        archive=$cache/$(basename "$SDK_URL")
+    fi
+    [[ -f $archive ]] || { printf 'ERROR: %s does not exist\n' "$archive" >&2; return 1; }
+    sum=$(sha256_of "$archive") || return 1
+    "$share/scripts/install-sdk.sh" "$archive" "$here" "$files" || return 1
+    # The record comes last: without it the SDK does not count as installed.
+    printf 'SDK_VERSION=%s\nSDK_DATE=%s\nSDK_SHA256=%s\n' "$SDK_VERSION" "$SDK_DATE" "$sum" > "$record.tmp" || return 1
+    mv -f "$record.tmp" "$record" || return 1
+}
+
+cmd_install() {
+    local best=0 force=0 archive=
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --best-effort) best=1 ;;
+            --force) force=1 ;;
+            -*) usage ;;
+            *) [[ -z $archive ]] || usage; archive=$1 ;;
+        esac
+        shift
+    done
+    if [[ $best -eq 1 && -n ${MORPHOS_CROSS_SKIP_SDK:-} ]]; then
+        printf 'Skipping the MorphOS SDK (MORPHOS_CROSS_SKIP_SDK is set). Install it later with: morphos-cross-sdk install\n'
+        return 0
+    fi
+    if [[ -z $archive && $force -eq 0 && $(sdk_state) == current ]]; then
+        printf 'The pinned MorphOS SDK %s (%s) is already installed in %s\n' "$SDK_VERSION" "$SDK_DATE" "$here"
+        return 0
+    fi
+    if [[ -z $archive ]]; then
+        printf 'Fetching the MorphOS SDK %s (%s) from morphos-team.net, about 370 MiB.\n' "$SDK_VERSION" "$SDK_DATE"
+    fi
+    if do_install "$archive"; then
         printf 'MorphOS SDK %s (%s) installed. Try: %s/bin/ppc-morphos-gcc --version\n' \
             "$SDK_VERSION" "$SDK_DATE" "$here"
-        ;;
-    status)
-        if [[ -f $marker ]]; then
-            printf 'MorphOS SDK is installed in %s\n' "$here"
-        else
+    elif [[ $best -eq 1 ]]; then
+        printf 'WARNING: the MorphOS SDK could not be installed. The compiler cannot build until it is.\n' >&2
+        printf 'Install it later, as the owner of %s, with: morphos-cross-sdk install\n' "$here" >&2
+        printf 'Without a network, download %s yourself and run: morphos-cross-sdk install SDK.lha\n' "$SDK_URL" >&2
+    else
+        return 1
+    fi
+}
+
+cmd_status() {
+    case $(sdk_state) in
+        current)
+            printf 'MorphOS SDK %s (%s) is installed in %s\n' "$SDK_VERSION" "$SDK_DATE" "$here"
+            ;;
+        outdated)
+            printf 'The MorphOS SDK in %s is not the pinned one (%s, %s). Run: morphos-cross-sdk install\n' \
+                "$here" "$SDK_VERSION" "$SDK_DATE"
+            return 1
+            ;;
+        *)
             printf 'MorphOS SDK is not installed. Run: morphos-cross-sdk install\n'
-            exit 1
+            return 1
+            ;;
+    esac
+}
+
+cmd_remove() {
+    if [[ ! -f $files ]]; then
+        if [[ -f $here/os-include/exec/types.h ]]; then
+            printf 'ERROR: SDK files are present in %s, but this helper did not install them and has no list of them\n' "$here" >&2
+            return 1
         fi
-        ;;
-    *)
-        printf 'usage: morphos-cross-sdk install [SDK.lha] | status\n' >&2
-        exit 2
-        ;;
+        printf 'The MorphOS SDK is not installed in %s\n' "$here"
+        return 0
+    fi
+    # Deepest paths first. A directory goes only when it is empty, so one that holds other files stays.
+    local rel target
+    while IFS= read -r rel; do
+        case $rel in
+            '' | /* | *..*) continue ;;
+        esac
+        target=${here:?}/$rel
+        if [[ -d $target && ! -L $target ]]; then
+            rmdir -- "$target" 2>/dev/null || true
+        else
+            rm -f -- "$target"
+        fi
+    done < <(LC_ALL=C sort -r "$files")
+    rm -f -- "$files" "$record"
+    printf 'MorphOS SDK removed from %s\n' "$here"
+}
+
+case "${1:-status}" in
+    install) shift; cmd_install "$@" ;;
+    status) cmd_status ;;
+    remove) cmd_remove ;;
+    *) usage ;;
 esac

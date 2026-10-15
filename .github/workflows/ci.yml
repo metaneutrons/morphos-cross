@@ -35,7 +35,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends ripgrep shellcheck file
+          sudo apt-get install -y -qq --no-install-recommends ripgrep shellcheck file libarchive-tools
           tools/install-ci-tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Install the locked SPDX validator
