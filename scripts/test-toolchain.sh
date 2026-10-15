@@ -43,26 +43,35 @@ check_toolchain() { # TREE
     done
     ok "output is ELF32, big endian, PowerPC, with the SDK id note"
 
-    # Every directory the preprocessor and the linker search must lie inside the tree.
-    local dirs outside
-    dirs=$("$cc" -E -v -x c /dev/null -o /dev/null 2>&1 | awk '/^ \//')
-    dirs="$dirs
-$("$cc" -print-search-dirs | tr ':=' '\n' | awk '/^\//')"
-    outside=$(printf '%s\n' "$dirs" | awk -v t="$t" 'NF && index($1, t) != 1')
-    [[ -z $outside ]] || fail "search paths outside the tree: $outside"
-    ok "all search paths lie inside the tree"
+    # Every absolute path the compiler reports must lie inside the tree: the include search, the
+    # command lines it runs, the sysroot and the library search. Only the "Configured with" line
+    # carries build paths by design. (An earlier version looked at the first word of each line only
+    # and never saw the sysroot that GCC had not relocated.)
+    local report outside
+    report=$({ "$cc" -E -v -x c /dev/null -o /dev/null 2>&1; "$cc" -print-sysroot; "$cc" -print-search-dirs; } |
+        grep -v -E '^(Configured with:|gcc version)')
+    outside=$(printf '%s\n' "$report" | grep -oE "/[A-Za-z0-9._+@%-][^ \"':=]*" | grep -v '^/dev/null$' |
+        awk -v t="$t" 'index($0, t) != 1' | sort -u)
+    [[ -z $outside ]] || fail "paths outside the tree: $(tr '\n' ' ' <<<"$outside")"
+    ok "every path the compiler reports lies inside the tree"
     rm -rf "$out"
 }
 
 [[ ! -e $tree/os-include ]] || fail "the archive already contains the SDK"
 "$tree/bin/morphos-cross-sdk" status && fail "status claims an SDK before install"
-"$tree/bin/morphos-cross-sdk" install "$sdk"
-"$tree/bin/morphos-cross-sdk" status
-check_toolchain "$tree"
 
-moved=$(mktemp -d)/relocated/morphos-cross
+# The installer names the folder after the release, never "morphos-cross", and a user may rename it:
+# the compiler must not depend on the folder's name. Test under such a name, then under another.
+original=$tree
+installed=$(mktemp -d)/v00000000-r0
+mv "$tree" "$installed"
+"$installed/bin/morphos-cross-sdk" install "$sdk"
+"$installed/bin/morphos-cross-sdk" status
+check_toolchain "$installed"
+
+moved=$(mktemp -d)/relocated/some-other-name
 mkdir -p "$(dirname "$moved")"
-mv "$tree" "$moved"
+mv "$installed" "$moved"
 check_toolchain "$moved"
-mv "$moved" "$tree"
-ok "relocation: tree works after moving it"
+mv "$moved" "$original"
+ok "relocation: the tree works under the installer's folder name and after moving and renaming it"

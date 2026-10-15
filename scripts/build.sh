@@ -125,13 +125,23 @@ host_libs() {
     mark libs
 }
 
+# The sysroot is the install prefix itself. GCC finds a relocated sysroot with make_relative_prefix
+# (libiberty), which splits both paths into components and keeps a trailing slash on every directory
+# but treats the last component of a path WITHOUT a trailing slash as a file name. "/P" against the
+# bin directory "/P/bin/" then yields bin/../../P, which is right only while the installed folder
+# is called "P" as well; "/P/" yields bin/../ whatever the folder is called (the installer names it
+# after the release). gcc/configure.ac strips exactly one trailing slash from --with-sysroot, so GCC
+# is given two. The compiler in the build tree would relocate its sysroot too, to a directory next to
+# itself that holds no SDK, so the build names the sysroot explicitly (--with-build-sysroot); the
+# installed compiler keeps the relocation. tests/gates.sh keeps this in place, scripts/test-toolchain.sh proves the result by
+# installing under a different folder name.
 build_binutils() {
     done_step binutils && return 0
     step "Build binutils"
     rm -rf "$work/build/binutils"
     mkdir -p "$work/build/binutils" "$stage"
     (cd "$work/build/binutils" &&
-        "$binutils_src/configure" --target="$target" --prefix="$stage" --with-sysroot="$stage" \
+        "$binutils_src/configure" --target="$target" --prefix="$stage" --with-sysroot="$stage/" \
             --enable-plugins=no --disable-initfini-array --disable-nls --disable-werror \
             --disable-gprofng --disable-gdb --disable-sim "${host_flags[@]}" ${binutils_flags[@]+"${binutils_flags[@]}"} \
             CFLAGS="-O2 -DMORPHOS_TARGET -DMORPHOS_SDK_RELEASE_ID=$MORPHOS_SDK_RELEASE_ID" &&
@@ -156,7 +166,7 @@ build_gcc() {
     "$stage/bin/$target-ar" rc "$dummy/libatomic.a"
     (cd "$work/build/gcc" &&
         PATH="$stage/bin:$PATH" "$gcc_src/configure" --target="$target" --prefix="$stage" \
-            --with-sysroot="$stage" \
+            --with-sysroot="$stage//" --with-build-sysroot="$stage" \
             CFLAGS_FOR_TARGET="-O2 -g -L$dummy" CXXFLAGS_FOR_TARGET="-O2 -g -L$dummy" \
             LDFLAGS_FOR_TARGET="-L$dummy" \
             --libexecdir="$stage/lib" --oldincludedir="$stage/include" \

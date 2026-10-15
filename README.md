@@ -69,9 +69,20 @@ int main(void)
 }
 ```
 
+```cpp
+// hello.cpp
+#include <iostream>
+
+int main()
+{
+    std::cout << "Hello from MorphOS\n";
+    return 0;
+}
+```
+
 ```sh
 ppc-morphos-gcc -O2 -o hello hello.c       # ixemul, the default C library
-ppc-morphos-gcc -O2 -mclib=libnix -o hello hello.c
+ppc-morphos-gcc -O2 -mclib=libnix -o hello-libnix hello.c
 ppc-morphos-g++ -O2 -o hello-cpp hello.cpp
 ```
 
