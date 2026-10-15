@@ -1,0 +1,3 @@
+# Patches are byte-exact records of changes to third-party source: never convert
+# line endings and do not flag their whitespace.
+*.diff -text -whitespace

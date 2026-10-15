@@ -1,0 +1,373 @@
+# The release pipeline. There is no release pull request: the version is the SDK date plus a
+# revision from pins.env, and a merge to main that changes pins.env releases it when that tag does
+# not exist yet. The tag is created here, after every build and check has passed, and the tag
+# ruleset makes it immutable.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: [pins.env]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  identity:
+    name: Release Identity
+    runs-on: ubuntu-24.04
+    outputs:
+      epoch: ${{ steps.metadata.outputs.epoch }}
+      publish: ${{ steps.metadata.outputs.publish }}
+      tag: ${{ steps.metadata.outputs.tag }}
+      version: ${{ steps.metadata.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Derive and check the release identity
+        id: metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]] || { echo "::error::releases are built from main only"; exit 1; }
+          . ./pins.env
+          tag="v$VERSION"
+          [[ "$tag" =~ ^v[0-9]{8}-r[1-9][0-9]*$ ]]
+          epoch=$(git show -s --format=%ct HEAD)
+          publish=true
+          # A newer commit on main supersedes this run.
+          git fetch --quiet origin main
+          if [[ "$(git rev-parse origin/main)" != "$GITHUB_SHA" ]]; then
+            publish=false
+            echo "::notice::main has moved on; the run for the newer commit decides"
+          fi
+          # A published release is final: this is how a push that only touches a comment in
+          # pins.env ends without effect.
+          if state=$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null) && [[ "$state" == false ]]; then
+            publish=false
+            echo "::notice::$tag is already published"
+          fi
+          {
+            echo "tag=$tag"
+            echo "version=$VERSION"
+            echo "epoch=$epoch"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.host }})
+    needs: identity
+    if: needs.identity.outputs.publish == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { host: linux-x86_64, runner: ubuntu-24.04 }
+          - { host: linux-arm64, runner: ubuntu-24.04-arm }
+          - { host: macos-arm64, runner: macos-15 }
+    env:
+      SOURCE_DATE_EPOCH: ${{ needs.identity.outputs.epoch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download the pinned SDK and sources
+        run: scripts/fetch.sh all
+      - name: Build, package and test in the pinned container
+        if: startsWith(matrix.host, 'linux-')
+        run: JOBS="$(nproc)" scripts/docker-build.sh
+      - name: Install build prerequisites
+        if: startsWith(matrix.host, 'macos-')
+        run: brew install make xz
+      - name: Build, package and test
+        if: startsWith(matrix.host, 'macos-')
+        env:
+          HOST: ${{ matrix.host }}
+        run: JOBS="$(sysctl -n hw.ncpu)" scripts/ci-build.sh "$HOST"
+      - name: Keep the archive for the clean-room test and the release
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: payload-${{ matrix.host }}
+          path: dist/*.tar.xz
+          if-no-files-found: error
+          retention-days: 1
+
+  # The build jobs tested the archive on a machine that has the build tools. Here a fresh
+  # container gets the archive and the prerequisites the README lists, and nothing else.
+  smoke:
+    name: Clean-Room Test (${{ matrix.host }}, ${{ matrix.image }})
+    needs: [identity, build]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { host: linux-x86_64, runner: ubuntu-24.04, image: 'debian:bookworm-slim' }
+          - { host: linux-x86_64, runner: ubuntu-24.04, image: 'ubuntu:24.04' }
+          - { host: linux-arm64, runner: ubuntu-24.04-arm, image: 'debian:bookworm-slim' }
+          - { host: linux-arm64, runner: ubuntu-24.04-arm, image: 'ubuntu:24.04' }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download the candidate archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: payload-${{ matrix.host }}
+          path: dl
+      - name: Download the pinned SDK
+        run: scripts/fetch.sh sdk
+      - name: Unpack and test in a clean container
+        env:
+          IMAGE: ${{ matrix.image }}
+          VERSION: ${{ needs.identity.outputs.version }}
+          HOST: ${{ matrix.host }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "$PWD:/src:ro" --volume "$PWD/dl:/dl:ro" --volume "$PWD/cache:/cache:ro" \
+            "$IMAGE" bash /src/scripts/clean-room.sh "/dl/morphos-cross-$VERSION-$HOST.tar.xz" /cache
+
+  source:
+    name: Source Archive
+    needs: identity
+    if: needs.identity.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      SOURCE_DATE_EPOCH: ${{ needs.identity.outputs.epoch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Unpack the pinned sources
+        run: |
+          set -euo pipefail
+          scripts/fetch.sh source
+          scripts/build.sh unpack
+      - name: Create the source archive
+        run: scripts/package-sources.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: payload-source
+          path: dist/*-source.tar.xz
+          if-no-files-found: error
+          retention-days: 1
+
+  supply-chain:
+    name: Sign, Attest, and Inventory
+    needs: [identity, build, smoke, source]
+    runs-on: ubuntu-24.04
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    env:
+      TAG: ${{ needs.identity.outputs.tag }}
+      VERSION: ${{ needs.identity.outputs.version }}
+      EPOCH: ${{ needs.identity.outputs.epoch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download the payloads
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: payload-*
+          merge-multiple: true
+          path: candidate
+      - name: Add the installer with this release's version
+        run: |
+          set -euo pipefail
+          sed "s/^default_version=@VERSION@\$/default_version=$TAG/" install.sh > candidate/install.sh
+          chmod 0755 candidate/install.sh
+          grep -q "^default_version=$TAG\$" candidate/install.sh
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: Install the locked SPDX validator
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: 0.8.17
+      - name: Prepare the validation environment
+        run: |
+          set -euo pipefail
+          uv venv "$RUNNER_TEMP/spdx-validation"
+          uv pip sync --python "$RUNNER_TEMP/spdx-validation/bin/python" \
+            --require-hashes tools/release/requirements.txt
+      - name: Generate and validate the SBOMs, sign every payload
+        run: |
+          set -euo pipefail
+          . ./pins.env
+          for host in $HOSTS; do
+            archive="candidate/morphos-cross-$VERSION-$host.tar.xz"
+            python3 tools/release/generate-sbom.py pins.env "$archive" "$archive.spdx.json" \
+              "$VERSION" "$GITHUB_SHA" "$EPOCH"
+            "$RUNNER_TEMP/spdx-validation/bin/python" tools/release/validate-sbom.py "$archive.spdx.json"
+          done
+          payloads=("candidate/morphos-cross-$VERSION-source.tar.xz" candidate/install.sh)
+          for host in $HOSTS; do payloads+=("candidate/morphos-cross-$VERSION-$host.tar.xz"); done
+          for payload in "${payloads[@]}"; do
+            cosign sign-blob --yes --bundle "$payload.sigstore.json" "$payload"
+          done
+      - name: Write the checksum inventory
+        run: |
+          set -euo pipefail
+          (cd candidate && find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | xargs sha256sum > "$RUNNER_TEMP/SHA256SUMS")
+          mv "$RUNNER_TEMP/SHA256SUMS" candidate/SHA256SUMS
+      - name: Attest every asset
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: candidate/*
+      - name: Verify the candidate and its tamper rejection
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tools/release/verify-candidate.sh candidate "$TAG" supply-chain
+
+          mkdir "$RUNNER_TEMP/tampered"
+          payload="morphos-cross-$VERSION-linux-x86_64.tar.xz"
+          cp "candidate/$payload" "$RUNNER_TEMP/tampered/$payload"
+          printf 'tamper\n' >> "$RUNNER_TEMP/tampered/$payload"
+          set +e
+          cosign verify-blob --offline \
+              --bundle "candidate/$payload.sigstore.json" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-identity \
+                "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml@refs/heads/main" \
+              "$RUNNER_TEMP/tampered/$payload" >"$RUNNER_TEMP/negative-cosign.log" 2>&1
+          cosign_status=$?
+          gh attestation verify "$RUNNER_TEMP/tampered/$payload" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref refs/heads/main >"$RUNNER_TEMP/negative-attestation.log" 2>&1
+          attestation_status=$?
+          set -e
+          [[ "$cosign_status" -eq 1 && "$attestation_status" -eq 1 ]]
+          grep -Eiq '(digest.*(match|mismatch)|invalid signature|signature verification failed)' \
+            "$RUNNER_TEMP/negative-cosign.log"
+          grep -Eq '(HTTP 404|404 Not Found)' "$RUNNER_TEMP/negative-attestation.log"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-candidate
+          path: candidate/*
+          if-no-files-found: error
+          retention-days: 1
+
+  preflight:
+    name: Publication Preflight
+    needs: [identity, supply-chain]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.identity.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify repository access, tag and release without changing them
+        run: tools/release/preflight.sh "$TAG"
+
+  stage:
+    name: Stage and Verify Prerelease
+    needs: [identity, supply-chain, preflight]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      attestations: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.identity.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download the candidate
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-candidate
+          path: candidate
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: Create the immutable tag and the draft
+        run: |
+          set -euo pipefail
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA" >/dev/null
+          fi
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --draft --prerelease --title "morphos-cross $TAG" \
+              --notes "Cross-compiler toolchain for MorphOS built from the pinned SDK sources. See the README."
+          fi
+      - name: Upload the assets and read them back
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" candidate/*
+          mkdir published
+          gh release download "$TAG" --dir published
+          tools/release/verify-candidate.sh published "$TAG" supply-chain
+          for asset in candidate/*; do
+            cmp "$asset" "published/$(basename "$asset")"
+          done
+      - name: Publish the candidate as a prerelease
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --draft=false --prerelease --latest=false
+          mkdir public
+          for asset in candidate/*; do
+            name=$(basename "$asset")
+            curl --fail --silent --show-error --location --retry 3 \
+              --output "public/$name" \
+              "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$name"
+          done
+          tools/release/verify-candidate.sh public "$TAG" supply-chain
+          for asset in candidate/*; do
+            cmp "$asset" "public/$(basename "$asset")"
+          done
+
+  promote:
+    name: Promote Stable Release
+    needs: [identity, stage]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      attestations: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.identity.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download the qualified candidate
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-candidate
+          path: candidate
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: Promote only after every verification passed
+        run: |
+          set -euo pipefail
+          tools/release/verify-candidate.sh candidate "$TAG" supply-chain
+          gh release download "$TAG" --dir before
+          for asset in candidate/*; do cmp "$asset" "before/$(basename "$asset")"; done
+          gh release edit "$TAG" --prerelease=false --latest
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" == "$TAG" ]]
+          mkdir after
+          for asset in candidate/*; do
+            name=$(basename "$asset")
+            curl --fail --silent --show-error --location --retry 3 \
+              --output "after/$name" \
+              "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$name"
+          done
+          tools/release/verify-candidate.sh after "$TAG" supply-chain
+          for asset in candidate/*; do cmp "$asset" "after/$(basename "$asset")"; done

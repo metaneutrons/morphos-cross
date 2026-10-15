@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Fetch the pinned MorphOS SDK from morphos-team.net and install its headers
+# and libraries into this toolchain. The SDK belongs to the MorphOS Team and is
+# not part of the morphos-cross archives; see README.md.
+#
+#   morphos-cross-sdk install [SDK.lha]   download (or use SDK.lha), verify, install
+#   morphos-cross-sdk status              say whether the SDK is installed
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")/.." && pwd)
+share=$here/share/morphos-cross
+# shellcheck source=../pins.env
+. "$share/pins.env"
+cache=${MORPHOS_CROSS_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/morphos-cross}
+marker=$here/os-include/exec/types.h
+
+case "${1:-status}" in
+    install)
+        archive=${2:-}
+        if [[ -z $archive ]]; then
+            MORPHOS_CROSS_CACHE=$cache "$share/scripts/fetch.sh" sdk
+            archive=$cache/$(basename "$SDK_URL")
+        fi
+        "$share/scripts/install-sdk.sh" "$archive" "$here"
+        printf 'MorphOS SDK %s (%s) installed. Try: %s/bin/ppc-morphos-gcc --version\n' \
+            "$SDK_VERSION" "$SDK_DATE" "$here"
+        ;;
+    status)
+        if [[ -f $marker ]]; then
+            printf 'MorphOS SDK is installed in %s\n' "$here"
+        else
+            printf 'MorphOS SDK is not installed. Run: morphos-cross-sdk install\n'
+            exit 1
+        fi
+        ;;
+    *)
+        printf 'usage: morphos-cross-sdk install [SDK.lha] | status\n' >&2
+        exit 2
+        ;;
+esac

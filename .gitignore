@@ -1,0 +1,10 @@
+# Build and download output. Patterns are unanchored on purpose, so that a new
+# subdirectory is covered as well.
+cache/
+work/
+dist/
+build/
+*.log
+.DS_Store
+__pycache__/
+*.pyc

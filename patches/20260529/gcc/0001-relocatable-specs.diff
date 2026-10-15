@@ -1,0 +1,43 @@
+Make the MorphOS compiler relocatable.
+
+The MorphOS patch writes /gg into the include and library search specs. In
+a cross compiler installed anywhere else those directories do not exist. %R is
+the sysroot, which GCC finds relative to the compiler when sysroot and prefix
+are the same tree, so the SDK is found next to the compiler wherever it lies.
+
+Applies after gcc-15-morphos.diff of the MorphOS SDK sources (sdk-source-20260529).
+
+--- a/gcc/config/rs6000/morphos.h
++++ b/gcc/config/rs6000/morphos.h
+@@ -199,19 +199,19 @@
+ #define ENDFILE_MORPHOS_DEFAULT_SPEC   "%(endfile_ixemul)"
+ 
+ /* ... ixemul */
+-#define CPP_IXEMUL_SPEC       "-idirafter /gg/include"
++#define CPP_IXEMUL_SPEC       "-idirafter %R/include"
+ #define LINK_IXEMUL_SPEC      "--flavor=ixemul"
+ #define STARTFILE_IXEMUL_SPEC "%{mbaserel32:%{!mresident32:lcrt0i.o%s}} %{mresident32:scrt0i.o%s} %{!mresident32:%{!mbaserel32:crt0i.o%s}} ecrti.o%s crtbegin.o%s"
+ #define ENDFILE_IXEMUL_SPEC   "crtend.o%s ecrtn.o%s"
+ 
+ /* ... libnix */
+-#define CPP_LIBNIX_SPEC       "-idirafter /gg/includestd -idirafter /gg/include"
++#define CPP_LIBNIX_SPEC       "-idirafter %R/includestd -idirafter %R/include"
+ #define LINK_LIBNIX_SPEC      "--flavor=libnix"
+ #define STARTFILE_LIBNIX_SPEC "%{mbaserel32:%{!mresident32:libnix/lcrt0i.o%s}} %{mresident32:libnix/scrt0i.o%s} %{!mresident32:%{!mbaserel32:libnix/crt0i.o%s}} ecrti.o%s crtbegin.o%s"
+ #define ENDFILE_LIBNIX_SPEC   "crtend.o%s ecrtn.o%s"
+ 
+ /* ... newlib */
+-#define CPP_NEWLIB_SPEC       "-isystem /gg/include-newlib -isystem /gg/includenl -isystem /gg/usr/include-newlib"
++#define CPP_NEWLIB_SPEC       "-isystem %R/include-newlib -isystem %R/includenl -isystem %R/usr/include-newlib"
+ #define LINK_NEWLIB_SPEC      "--flavor=newlib"
+ #define STARTFILE_NEWLIB_SPEC "%{mbaserel32:%{!mresident32:newlib/lcrt0i.o%s}} %{mresident32:newlib/scrt0i.o%s} %{!mresident32:%{!mbaserel32:newlib/crt0i.o%s}} ecrti.o%s crtbegin.o%s"
+ #define ENDFILE_NEWLIB_SPEC   "crtend.o%s ecrtn.o%s"
+@@ -259,7 +259,7 @@
+ 
+ 
+ #undef LIB_SPEC
+-#define LIB_SPEC "%{!nostdlib: -L/gg/lib -L/gg/usr/lib} --start-group -lc -labox -laboxstubs -lsavl -latomic %{mclib=libnix: -lauto} %{pthread:-lpthread} --end-group"
++#define LIB_SPEC "%{!nostdlib: -L%R/lib -L%R/usr/lib} --start-group -lc -labox -laboxstubs -lsavl -latomic %{mclib=libnix: -lauto} %{pthread:-lpthread} --end-group"
+ 
+ #undef SUBTARGET_EXTRA_SPECS
+ #define SUBTARGET_EXTRA_SPECS \

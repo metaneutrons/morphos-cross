@@ -1,0 +1,25 @@
+commit-msg:
+  commands:
+    conventional-commits:
+      run: sh scripts/hooks/check-commit-message.sh {1}
+
+pre-commit:
+  parallel: true
+  commands:
+    staged-guards:
+      run: sh scripts/hooks/check-staged.sh
+    whitespace:
+      run: git diff --cached --check
+    secrets:
+      run: gitleaks git --pre-commit --redact --staged --verbose
+    shellcheck:
+      glob: "*.sh"
+      run: shellcheck -x -P SCRIPTDIR {staged_files}
+
+pre-push:
+  parallel: false
+  commands:
+    secrets:
+      run: sh scripts/hooks/check-push-secrets.sh
+    repository-audit:
+      run: make repository-audit

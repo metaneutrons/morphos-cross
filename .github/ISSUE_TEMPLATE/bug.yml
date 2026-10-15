@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a reproducible defect in the toolchain, the installer or the release
+title: "fix: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not report security vulnerabilities here. Use private vulnerability reporting.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Explain what happened and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: The exact commands, starting from the download.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Release tag
+      description: For example v20260529-r1
+    validations:
+      required: true
+  - type: dropdown
+    id: host
+    attributes:
+      label: Host
+      options:
+        - linux-x86_64
+        - linux-arm64
+        - macos-arm64
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The complete output of the failing command.
+      render: shell

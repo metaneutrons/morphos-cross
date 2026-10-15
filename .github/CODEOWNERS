@@ -1,0 +1,4 @@
+# CODEOWNERS for morphos-cross
+# Replaces deprecated reviewers config in Dependabot
+
+* @metaneutrons

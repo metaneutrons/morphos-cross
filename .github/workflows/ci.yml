@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  commit-hygiene:
+    name: Commit Hygiene
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check pull request and commit attribution
+        run: tools/check-commit-hygiene.sh
+
+  quality:
+    name: Repository Quality
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Install pinned CI tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ripgrep shellcheck file
+          tools/install-ci-tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Install the locked SPDX validator
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: 0.8.17
+      - name: Prepare the validation environment
+        run: |
+          set -euo pipefail
+          uv venv "$RUNNER_TEMP/spdx-validation"
+          uv pip sync --python "$RUNNER_TEMP/spdx-validation/bin/python" \
+            --require-hashes tools/release/requirements.txt
+      - name: Validate repository and quality gates
+        run: |
+          set -euo pipefail
+          make repository-audit
+          make quality-gates
+          make shellcheck
+          make actionlint
+          make secrets-scan
+      - name: Validate a generated SBOM with the official SPDX validator
+        run: |
+          set -euo pipefail
+          printf 'sample' > "$RUNNER_TEMP/sample.tar.xz"
+          . ./pins.env
+          python3 tools/release/generate-sbom.py pins.env "$RUNNER_TEMP/sample.tar.xz" \
+            "$RUNNER_TEMP/sample.tar.xz.spdx.json" "$VERSION" "$GITHUB_SHA" 0
+          "$RUNNER_TEMP/spdx-validation/bin/python" tools/release/validate-sbom.py \
+            "$RUNNER_TEMP/sample.tar.xz.spdx.json"
+
+  patches:
+    name: Patches Fit the Pinned Sources
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Unpack the pinned sources and apply every patch
+        run: make patches-check
+
+  build:
+    name: Build and Test (${{ matrix.host }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { host: linux-x86_64, runner: ubuntu-24.04 }
+          - { host: linux-arm64, runner: ubuntu-24.04-arm }
+          - { host: macos-arm64, runner: macos-15 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download the pinned SDK and sources
+        run: scripts/fetch.sh all
+      - name: Build, package and test in the pinned container
+        if: startsWith(matrix.host, 'linux-')
+        run: JOBS="$(nproc)" scripts/docker-build.sh
+      - name: Install build prerequisites
+        if: startsWith(matrix.host, 'macos-')
+        run: brew install make xz
+      - name: Build, package and test
+        if: startsWith(matrix.host, 'macos-')
+        run: JOBS="$(sysctl -n hw.ncpu)" scripts/ci-build.sh "${{ matrix.host }}"
+
+  # The only required check in the ruleset. Matrix changes therefore do not break the repository
+  # configuration.
+  ci-success:
+    name: CI Success
+    if: always()
+    needs: [commit-hygiene, quality, patches, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Require every preceding job
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: tools/check-ci-results.sh

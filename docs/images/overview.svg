@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="360" viewBox="0 0 800 360" role="img" aria-labelledby="title desc">
+  <title id="title">How morphos-cross works</title>
+  <desc id="desc">A pinned MorphOS SDK and its sources are built into one cross-compiler archive per host. The installer downloads the archive and the pinned SDK and puts them together on your machine.</desc>
+  <style>
+    text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; fill: #000; }
+    .window-title { font-size: 14px; font-weight: 700; }
+    .group { font-size: 13px; font-weight: 700; }
+    .layer { font-size: 14px; font-weight: 700; }
+    .files { font-size: 13px; }
+    .arrow { fill: #000; }
+  </style>
+  <g shape-rendering="crispEdges">
+    <rect x="0" y="0" width="800" height="360" fill="#6688bb"/>
+    <path d="M0.5 359.5 V0.5 H799.5" fill="none" stroke="#fff"/>
+    <path d="M0.5 359.5 H799.5 V0.5" fill="none" stroke="#000"/>
+    <rect x="4" y="22" width="792" height="334" fill="#aaaaaa"/>
+    <path d="M4.5 355.5 V22.5 H795.5" fill="none" stroke="#000"/>
+    <path d="M4.5 355.5 H795.5 V22.5" fill="none" stroke="#fff"/>
+    <path d="M1.5 21.5 V1.5 H22.5" fill="none" stroke="#fff"/>
+    <path d="M1.5 21.5 H22.5 V1.5" fill="none" stroke="#000"/>
+    <rect x="8" y="7" width="8" height="8" fill="#fff" stroke="#000"/>
+    <path d="M776.5 21.5 V1.5 H798.5" fill="none" stroke="#fff"/>
+    <path d="M776.5 21.5 H798.5 V1.5" fill="none" stroke="#000"/>
+    <rect x="781.5" y="5.5" width="9" height="7" fill="#aaaaaa" stroke="#000"/>
+    <rect x="785.5" y="9.5" width="9" height="7" fill="#fff" stroke="#000"/>
+  </g>
+  <text class="window-title" x="32" y="16">morphos-cross</text>
+
+  <!-- column 1: pinned inputs -->
+  <g shape-rendering="crispEdges" fill="none">
+    <rect x="16.5" y="40.5" width="236" height="302" stroke="#000"/>
+    <rect x="17.5" y="41.5" width="236" height="302" stroke="#fff"/>
+    <path d="M30.5 140.5 V60.5 H238.5" stroke="#fff"/><path d="M30.5 140.5 H238.5 V60.5" stroke="#000"/>
+    <path d="M30.5 236.5 V156.5 H238.5" stroke="#fff"/><path d="M30.5 236.5 H238.5 V156.5" stroke="#000"/>
+    <path d="M30.5 332.5 V252.5 H238.5" stroke="#fff"/><path d="M30.5 332.5 H238.5 V252.5" stroke="#000"/>
+  </g>
+  <rect x="26" y="32" width="120" height="18" fill="#aaaaaa"/>
+  <text class="group" x="32" y="45">pins.env</text>
+  <text class="layer" x="42" y="82">MorphOS SDK</text>
+  <text class="files" x="42" y="102">sdk-20260529.lha</text>
+  <text class="files" x="42" y="120">URL + SHA-256</text>
+  <text class="layer" x="42" y="178">SDK sources</text>
+  <text class="files" x="42" y="198">GCC 15.2.0 · binutils</text>
+  <text class="files" x="42" y="216">MorphOS patches</text>
+  <text class="layer" x="42" y="274">Our patches</text>
+  <text class="files" x="42" y="294">patches/&lt;SDK date&gt;/</text>
+  <text class="files" x="42" y="312">applied without fuzz</text>
+
+  <!-- column 2: build -->
+  <g shape-rendering="crispEdges" fill="none">
+    <rect x="282.5" y="40.5" width="236" height="302" stroke="#000"/>
+    <rect x="283.5" y="41.5" width="236" height="302" stroke="#fff"/>
+    <path d="M296.5 140.5 V60.5 H504.5" stroke="#fff"/><path d="M296.5 140.5 H504.5 V60.5" stroke="#000"/>
+    <path d="M296.5 236.5 V156.5 H504.5" stroke="#fff"/><path d="M296.5 236.5 H504.5 V156.5" stroke="#000"/>
+    <path d="M296.5 332.5 V252.5 H504.5" stroke="#fff"/><path d="M296.5 332.5 H504.5 V252.5" stroke="#000"/>
+  </g>
+  <rect x="292" y="32" width="200" height="18" fill="#aaaaaa"/>
+  <text class="group" x="298" y="45">GitHub Actions</text>
+  <text class="layer" x="308" y="82">Build, 3 hosts</text>
+  <text class="files" x="308" y="102">Linux x86-64 · arm64</text>
+  <text class="files" x="308" y="120">macOS Apple silicon</text>
+  <text class="layer" x="308" y="178">Test</text>
+  <text class="files" x="308" y="198">compile, link, ELF check</text>
+  <text class="files" x="308" y="216">move the tree, test again</text>
+  <text class="layer" x="308" y="274">Sign and publish</text>
+  <text class="files" x="308" y="294">Sigstore · attestations</text>
+  <text class="files" x="308" y="312">prerelease, then latest</text>
+
+  <!-- column 3: your machine -->
+  <g shape-rendering="crispEdges" fill="none">
+    <rect x="548.5" y="40.5" width="236" height="302" stroke="#000"/>
+    <rect x="549.5" y="41.5" width="236" height="302" stroke="#fff"/>
+    <path d="M562.5 140.5 V60.5 H770.5" stroke="#fff"/><path d="M562.5 140.5 H770.5 V60.5" stroke="#000"/>
+    <path d="M562.5 236.5 V156.5 H770.5" stroke="#fff"/><path d="M562.5 236.5 H770.5 V156.5" stroke="#000"/>
+    <path d="M562.5 332.5 V252.5 H770.5" stroke="#fff"/><path d="M562.5 332.5 H770.5 V252.5" stroke="#000"/>
+  </g>
+  <rect x="558" y="32" width="150" height="18" fill="#aaaaaa"/>
+  <text class="group" x="564" y="45">Your machine</text>
+  <text class="layer" x="574" y="82">install.sh</text>
+  <text class="files" x="574" y="102">download, verify, unpack</text>
+  <text class="files" x="574" y="120">about 35 MB</text>
+  <text class="layer" x="574" y="178">SDK from MorphOS</text>
+  <text class="files" x="574" y="198">fetched and checked</text>
+  <text class="files" x="574" y="216">against the pinned hash</text>
+  <text class="layer" x="574" y="274">ppc-morphos-gcc</text>
+  <text class="files" x="574" y="294">C, C++, Objective-C</text>
+  <text class="files" x="574" y="312">runs from any folder</text>
+
+  <!-- arrows between the columns -->
+  <polygon class="arrow" points="256,226 276,226 276,220 282,226 276,232 276,226"/>
+  <polygon class="arrow" points="522,226 542,226 542,220 548,226 542,232 542,226"/>
+</svg>
