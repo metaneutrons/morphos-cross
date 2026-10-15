@@ -107,7 +107,7 @@ Every asset of a release is listed in `SHA256SUMS`, carries a keyless
 GitHub build provenance attestation.
 
 ```sh
-tag=v20260529-r1                       # the release you downloaded
+tag=v20260529-r2                       # the release you downloaded
 asset=morphos-cross-${tag#v}-linux-arm64.tar.xz
 
 sha256sum --check --ignore-missing SHA256SUMS
@@ -126,7 +126,7 @@ gh attestation verify "$asset" --repo metaneutrons/morphos-cross
 There is no version number of its own. A release is named after the SDK it was built from:
 
 ```
-v20260529-r1   =   MorphOS 3.20 SDK of 29 May 2026, first build
+v20260529-r2   =   MorphOS 3.20 SDK of 29 May 2026, second build
 ```
 
 `-rN` counts rebuilds of the same SDK, for a fix in the scripts or patches. The SDK date, the SHA-256
