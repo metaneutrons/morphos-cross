@@ -58,6 +58,7 @@ check_toolchain() { # TREE
 }
 
 [[ ! -e $tree/os-include ]] || fail "the archive already contains the SDK"
+before=$(cd "$tree" && find . | LC_ALL=C sort)
 "$tree/bin/morphos-cross-sdk" status && fail "status claims an SDK before install"
 
 # The installer names the folder after the release, never "morphos-cross", and a user may rename it:
@@ -75,3 +76,10 @@ mv "$installed" "$moved"
 check_toolchain "$moved"
 mv "$moved" "$original"
 ok "relocation: the tree works under the installer's folder name and after moving and renaming it"
+
+# Removing the SDK must leave the archive's own files and nothing else.
+"$original/bin/morphos-cross-sdk" remove
+"$original/bin/morphos-cross-sdk" status && fail "status claims an SDK after remove"
+after=$(cd "$original" && find . | LC_ALL=C sort)
+[[ $after == "$before" ]] || fail "remove changed the tree: $(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | head -10 | tr '\n' ' ')"
+ok "remove: the tree is back to the files of the archive"

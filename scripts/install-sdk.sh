@@ -3,11 +3,15 @@
 # Extract the parts of the MorphOS SDK that the compiler needs (headers and
 # libraries) from the SDK archive into DEST. The SDK itself is not part of
 # morphos-cross; its owner is the MorphOS Team, see README.md.
-# Usage: scripts/install-sdk.sh SDK.lha DEST
+# Usage: scripts/install-sdk.sh SDK.lha DEST [LIST]
+# The files are unpacked into a scratch directory first and reach DEST only after the SDK has been
+# recognised, so a damaged archive changes nothing. LIST, when given, receives the relative path of
+# every installed file, link and directory, which morphos-cross-sdk uses to remove them again.
 set -euo pipefail
 
-lha=${1:?usage: install-sdk.sh SDK.lha DEST}
-dest=${2:?usage: install-sdk.sh SDK.lha DEST}
+lha=${1:?usage: install-sdk.sh SDK.lha DEST [LIST]}
+dest=${2:?usage: install-sdk.sh SDK.lha DEST [LIST]}
+list=${3:-}
 lha=$(cd "$(dirname "$lha")" && pwd)/$(basename "$lha")
 
 tmp=$(mktemp -d)
@@ -32,7 +36,19 @@ if [[ -z $gg ]]; then
     exit 1
 fi
 
+stage=$tmp/stage
+mkdir -p "$stage"
+xz -dc "$pack" | tar -xf - -C "$stage" --no-same-owner --no-same-permissions --strip-components=2 \
+    --exclude ldscripts "$gg/include" "$gg/includestd" "$gg/os-include" "$gg/ppc-morphos"
+if [[ ! -f $stage/os-include/exec/types.h ]]; then
+    printf 'ERROR: the SDK pack lacks os-include/exec/types.h; nothing was installed\n' >&2
+    exit 1
+fi
+
 mkdir -p "$dest"
-xz -dc "$pack" | tar -xf - -C "$dest" --strip-components=2 --exclude ldscripts \
-    "$gg/include" "$gg/includestd" "$gg/os-include" "$gg/ppc-morphos"
+(cd "$stage" && tar -cf - .) | tar -xf - -C "$dest" --no-same-owner --no-same-permissions
+if [[ -n $list ]]; then
+    (cd "$stage" && find . -mindepth 1 | sed 's|^\./||' | LC_ALL=C sort) > "$list.tmp"
+    mv -f "$list.tmp" "$list"
+fi
 printf 'SDK headers and libraries installed in %s\n' "$dest"

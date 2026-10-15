@@ -98,7 +98,14 @@ CXX = ppc-morphos-g++
 AR  = ppc-morphos-ar
 ```
 
-`morphos-cross-sdk status` tells you whether the SDK is installed in the toolchain you run it from.
+`morphos-cross-sdk status` tells you whether the pinned SDK is installed in the toolchain you run it from
+and exits with 1 if it is not. `morphos-cross-sdk remove` deletes exactly the files the helper installed.
+The helper also works through a symbolic link, so a package can link it into `/usr/bin`.
+
+Package scripts call `morphos-cross-sdk install --best-effort`. A failed download then prints a warning
+with the command to repeat and the exit status stays 0, so a missing network never fails a package
+installation. `MORPHOS_CROSS_SKIP_SDK=1` skips the step, and an interrupted download resumes on the next
+run. Without a network, download the SDK archive elsewhere and run `morphos-cross-sdk install SDK.lha`.
 
 ## Verify a download
 
