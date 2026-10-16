@@ -46,6 +46,61 @@ export PATH="$HOME/.morphos-cross/current/bin:$PATH"
 
 Pass options to a piped installer with `sh -s --`, for example `... | sh -s -- --no-sdk`.
 
+### Package managers
+
+The same toolchain comes through three package managers. None of them contains the MorphOS SDK: each
+one fetches it from morphos-team.net during the installation and checks it against the pinned hash.
+
+**Homebrew** (macOS Apple silicon, Linux x86-64 and arm64)
+
+```sh
+brew install metaneutrons/tap/morphos-cross
+```
+
+**Debian and Ubuntu** (amd64 and arm64), from the archive at `deb.metaneutrons.cc`
+
+```sh
+curl -fsSL -o /tmp/metaneutrons-archive-keyring.pgp \
+  https://deb.metaneutrons.cc/metaneutrons-archive-keyring.pgp
+gpg --show-keys --with-fingerprint /tmp/metaneutrons-archive-keyring.pgp
+sudo install -m 0644 /tmp/metaneutrons-archive-keyring.pgp \
+  /usr/share/keyrings/metaneutrons-archive-keyring.pgp
+
+sudo tee /etc/apt/sources.list.d/deb.metaneutrons.cc.sources >/dev/null <<'SOURCES'
+Types: deb
+URIs: https://deb.metaneutrons.cc
+Suites: rolling
+Components: main
+Signed-By: /usr/share/keyrings/metaneutrons-archive-keyring.pgp
+SOURCES
+sudo apt update && sudo apt install morphos-cross
+```
+
+The keyring goes to a temporary file first so that you can look at it before it becomes trusted. `gpg`
+has to print exactly these two fingerprints, the offline primary key and the signing subkey:
+
+```
+1B7B 7941 7383 648B BFBE  282E 01AB 8296 EF0F CD76
+A0C2 1782 FC50 7CCB D666  F3ED 2420 72FE C8BE 54A4
+```
+
+The package installs the toolchain under `/usr/lib/morphos-cross` and links the tools into `/usr/bin`. If
+the SDK download fails, for example without a network, the installation still succeeds: run
+`morphos-cross-sdk install` later. `MORPHOS_CROSS_SKIP_SDK=1` skips the download.
+
+**Arch Linux** (x86-64 and aarch64), the AUR package [`morphos-cross-bin`](https://aur.archlinux.org/packages/morphos-cross-bin)
+
+```sh
+yay -S morphos-cross-bin
+```
+
+Without an AUR helper, clone `https://aur.archlinux.org/morphos-cross-bin.git` and run `makepkg -si`
+in it. `makepkg` downloads the SDK, and the package installs the toolchain under `/opt/morphos-cross`
+with links in `/usr/bin`.
+
+`brew upgrade`, `apt upgrade` and your AUR helper bring a new release. A release that pins a newer SDK
+installs that SDK as well.
+
 ### Supported machines
 
 | Host | Archive | Requirements |
@@ -97,6 +152,11 @@ CC  = ppc-morphos-gcc
 CXX = ppc-morphos-g++
 AR  = ppc-morphos-ar
 ```
+
+GCC searches the directories in `CPATH`, `C_INCLUDE_PATH` and `CPLUS_INCLUDE_PATH` before its own, so
+headers of your host can hide the MorphOS ones. A `stdio.h` of macOS or Linux that fails with errors such
+as `unknown type name '__darwin_ssize_t'` is the symptom. Run the build without them, for example
+`env -u CPATH -u C_INCLUDE_PATH -u CPLUS_INCLUDE_PATH make`.
 
 `morphos-cross-sdk status` tells you whether the pinned SDK is installed in the toolchain you run it from
 and exits with 1 if it is not. `morphos-cross-sdk remove` deletes exactly the files the helper installed.
