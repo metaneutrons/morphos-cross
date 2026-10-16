@@ -79,10 +79,19 @@ anything public changes.
 | AUR | variable `AUR_SSH_KNOWN_HOSTS`, secret `AUR_SSH_PRIVATE_KEY` | `morphos-cross-bin` |
 | APT | variable `ARCHIVE_DISPATCH_CLIENT_ID`, secret `ARCHIVE_DISPATCH_PRIVATE_KEY` | project `morphos-cross` in `metaneutrons/apt-archive` |
 
+The environment `release` has no required reviewers. What stands before a release is the merge of a
+`pins.env` change into `main`, which needs the required check `CI Success`, and the environment's
+deployment branch policy, which hands its secrets to `main` and `v*` only. A reviewer would approve the
+run of the merge they just made. The Apps `metaneutrons-homebrew` and `metaneutrons-apt-dispatch` also
+serve other repositories of the maintainer; rotating one of their private keys means replacing the secret
+in each of them.
+
 `make check` runs the probes of the packaging scripts. The Debian package is built and installed in clean
 containers by `scripts/test-deb.sh`, and `tools/release/aur.sh verify` builds the AUR recipe in an Arch
 container.
 
-If a release run fails after it created the draft release, delete the draft
+If a release run fails before the candidate is public, it left a draft: delete it
 (`gh release delete v<version> --yes`, the tag stays and is reused) and re-run the Release workflow
-from `main`. A published release is final: fix forward with the next revision.
+from `main`. Once the prerelease is public, a channel may already have taken its files, so do not re-run:
+fix forward with the next revision. The prerelease stays until the next release has replaced it in the
+channels, and can then be deleted. A published release is final: fix forward with the next revision.
