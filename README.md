@@ -28,7 +28,7 @@ curl -fsSL https://github.com/metaneutrons/morphos-cross/releases/latest/downloa
 The installer picks the archive for your machine, checks it against `SHA256SUMS` and, when
 [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) is installed, against the
 Sigstore signature. It unpacks into `~/.morphos-cross/<release>` and points `~/.morphos-cross/current`
-at it. Then it downloads the MorphOS SDK from morphos-team.net (about 390 MB), checks it against the
+at it. Then it downloads the MorphOS SDK from morphos-team.net (about 370 MiB), checks it against the
 hash pinned in this repository and installs its headers and libraries into the toolchain.
 
 Add the toolchain to your `PATH`:
@@ -43,6 +43,7 @@ export PATH="$HOME/.morphos-cross/current/bin:$PATH"
 | `--prefix DIR` | install somewhere else (or set `MORPHOS_CROSS_HOME`) |
 | `--no-sdk` | skip the SDK; later run `morphos-cross-sdk install` |
 | `--require-signature` | stop unless cosign verified the signature |
+| `--force` | replace a release that is already installed |
 
 Pass options to a piped installer with `sh -s --`, for example `... | sh -s -- --no-sdk`.
 
@@ -98,6 +99,9 @@ Without an AUR helper, clone `https://aur.archlinux.org/morphos-cross-bin.git` a
 in it. `makepkg` downloads the SDK, and the package installs the toolchain under `/opt/morphos-cross`
 with links in `/usr/bin`.
 
+All three put the tools on your `PATH`: Homebrew links them into its `bin` directory, the Debian and the AUR
+package into `/usr/bin`. The `export PATH` above belongs to the installer only.
+
 `brew upgrade`, `apt upgrade` and your AUR helper bring a new release. A release that pins a newer SDK
 installs that SDK as well.
 
@@ -145,6 +149,25 @@ The output is a 32-bit big-endian PowerPC ELF executable for MorphOS. Copy it to
 run it. The compiler, assembler and linker are the MorphOS Team's own patched GCC 15.2.0 and
 binutils 2.45.1, with C, C++, Objective-C and Objective-C++.
 
+A program that calls MorphOS libraries directly includes the SDK's `proto/` headers and has to be built
+with `-noixemul`, which selects the same C library as `-mclib=libnix`. With ixemul, the default, those
+headers stop with `Mixing ixemul and native library calls is not supported`.
+
+```c
+/* api.c */
+#include <proto/dos.h>
+
+int main(void)
+{
+    Printf("Hello from the MorphOS API\n");
+    return 0;
+}
+```
+
+```sh
+ppc-morphos-gcc -O2 -noixemul -o api api.c
+```
+
 In a Makefile:
 
 ```make
@@ -169,15 +192,19 @@ run. Without a network, download the SDK archive elsewhere and run `morphos-cros
 
 ## Verify a download
 
-Every asset of a release is listed in `SHA256SUMS`, carries a keyless
-[Sigstore](https://www.sigstore.dev/) signature made by this repository's release workflow, and has a
-GitHub build provenance attestation.
+`SHA256SUMS` lists every other file of a release. Every download (the toolchain archives, the Debian
+packages, the source archive, the installer and the package recipes) also carries a keyless
+[Sigstore](https://www.sigstore.dev/) signature made by this repository's release workflow, and every
+file has a GitHub build provenance attestation.
 
 ```sh
-tag=v20260529-r2                       # the release you downloaded
+tag=v20260529-r4                       # the release you downloaded
 asset=morphos-cross-${tag#v}-linux-arm64.tar.xz
 
-sha256sum --check --ignore-missing SHA256SUMS
+gh release download "$tag" --repo metaneutrons/morphos-cross \
+  --pattern SHA256SUMS --pattern "$asset" --pattern "$asset.sigstore.json"
+
+sha256sum --check --ignore-missing SHA256SUMS   # without sha256sum: shasum -a 256 --check --ignore-missing SHA256SUMS
 
 cosign verify-blob \
   --bundle "$asset.sigstore.json" \
@@ -193,7 +220,7 @@ gh attestation verify "$asset" --repo metaneutrons/morphos-cross
 There is no version number of its own. A release is named after the SDK it was built from:
 
 ```
-v20260529-r2   =   MorphOS 3.20 SDK of 29 May 2026, second build
+v20260529-r4   =   MorphOS 3.20 SDK of 29 May 2026, fourth build
 ```
 
 `-rN` counts rebuilds of the same SDK, for a fix in the scripts or patches. The SDK date, the SHA-256
