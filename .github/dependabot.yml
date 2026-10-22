@@ -16,7 +16,7 @@ updates:
       - dependencies
       - github-actions
     groups:
-      github-actions-minor-patch:
+      actions:
         patterns: ['*']
         update-types: [minor, patch]
 
