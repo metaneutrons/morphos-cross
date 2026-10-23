@@ -151,7 +151,7 @@ expect_plan "the README alone skips the builds" false README.md
 expect_plan "documentation and its image skip the builds" false README.md docs/images/overview.svg
 expect_plan "repository tooling and its gates skip the builds" false tools/check-no-binaries.sh tests/gates.sh tests/install.sh
 expect_plan "the installer is checked elsewhere" false install.sh
-expect_plan "the release and Dependabot workflows skip the builds" false .github/workflows/release.yml .github/workflows/dependabot-auto-merge.yml .github/dependabot.yml
+expect_plan "the release and Dependabot workflows skip the builds" false .github/workflows/release.yml .github/workflows/dependabot-auto-merge.yml .github/workflows/post-merge-ci.yml .github/dependabot.yml
 expect_plan "a build script selects the builds" true scripts/build.sh
 expect_plan "a change mixed with documentation selects the builds" true README.md scripts/package.sh docs/images/overview.svg
 expect_plan "a patch selects the builds" true patches/20260529/gcc/0001-relocatable-specs.diff
