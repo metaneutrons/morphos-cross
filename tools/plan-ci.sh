@@ -15,7 +15,7 @@ skips_build() {
         Makefile | lefthook.yml | scripts/hooks/*) return 0 ;;
         .github/CODEOWNERS | .github/dependabot.yml | .github/pull_request_template.md) return 0 ;;
         .github/ISSUE_TEMPLATE/*) return 0 ;;
-        .github/workflows/release.yml | .github/workflows/dependabot-auto-merge.yml) return 0 ;;
+        .github/workflows/release.yml | .github/workflows/dependabot-auto-merge.yml | .github/workflows/post-merge-ci.yml) return 0 ;;
     esac
     return 1
 }

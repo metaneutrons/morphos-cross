@@ -1,0 +1,26 @@
+name: Post-Merge CI
+
+# The Dependabot auto-merge enables the merge with GITHUB_TOKEN, and events caused by that token start no
+# workflows, so the push of such a merge builds nothing. A dispatch is the exception GitHub allows.
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  actions: write
+
+jobs:
+  dispatch:
+    name: Run CI on main
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    if: >-
+      github.event.pull_request.merged == true
+      && github.event.pull_request.user.login == 'dependabot[bot]'
+      && github.event.pull_request.merged_by.login == 'github-actions[bot]'
+    steps:
+      - name: Start CI for main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref main
