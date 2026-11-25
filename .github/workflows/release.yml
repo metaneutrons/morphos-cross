@@ -129,7 +129,7 @@ jobs:
       - name: Mint a tap token
         if: steps.decide.outputs.homebrew == 'true'
         id: tap-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.HOMEBREW_APP_CLIENT_ID }}
           private-key: ${{ secrets.HOMEBREW_APP_PRIVATE_KEY }}
@@ -156,7 +156,7 @@ jobs:
       - name: Mint an archive token
         if: steps.decide.outputs.apt == 'true'
         id: archive-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.ARCHIVE_DISPATCH_CLIENT_ID }}
           private-key: ${{ secrets.ARCHIVE_DISPATCH_PRIVATE_KEY }}
@@ -343,11 +343,11 @@ jobs:
           chmod 0755 candidate/install.sh
           grep -q "^default_version=$TAG\$" candidate/install.sh
       - name: Install Cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with:
           cosign-release: v3.1.3
       - name: Install the locked SPDX validator
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: 0.8.17
       - name: Prepare the validation environment
@@ -464,7 +464,7 @@ jobs:
           name: release-candidate
           path: candidate
       - name: Install Cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with:
           cosign-release: v3.1.3
       - name: Create the immutable tag and the draft
@@ -523,7 +523,7 @@ jobs:
     steps:
       - name: Mint a tap token
         id: tap-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.HOMEBREW_APP_CLIENT_ID }}
           private-key: ${{ secrets.HOMEBREW_APP_PRIVATE_KEY }}
@@ -632,7 +632,7 @@ jobs:
       # origin.
       - name: Mint a fresh tap token
         id: merge-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.HOMEBREW_APP_CLIENT_ID }}
           private-key: ${{ secrets.HOMEBREW_APP_PRIVATE_KEY }}
@@ -817,7 +817,7 @@ jobs:
           name: release-candidate
           path: candidate
       - name: Install Cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with:
           cosign-release: v3.1.3
       - name: Promote only after every verification passed
@@ -864,7 +864,7 @@ jobs:
     steps:
       - name: Mint an archive token
         id: archive-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.ARCHIVE_DISPATCH_CLIENT_ID }}
           private-key: ${{ secrets.ARCHIVE_DISPATCH_PRIVATE_KEY }}
